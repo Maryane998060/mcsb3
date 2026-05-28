@@ -1,0 +1,560 @@
+{% extends "base.html" %}
+{% block title %}Relatório IRPF — {{ r.client_name }}{% endblock %}
+
+{% block page_css %}
+  <link rel="stylesheet" href="{{ url_for('serve_template_css', filename='report.css') }}" />
+{% endblock %}
+
+{% block nav_extra %}
+  <a href="{{ url_for('export_excel') }}" class="btn btn-sm btn-success">
+    <i class="bi bi-file-earmark-excel me-1"></i>Exportar Excel
+  </a>
+  <button class="btn btn-sm btn-outline-light" onclick="window.print()">
+    <i class="bi bi-printer me-1"></i>Imprimir / PDF
+  </button>
+  <a href="{{ url_for('new_report') }}" class="btn btn-sm btn-outline-light">
+    <i class="bi bi-arrow-left me-1"></i>Novo
+  </a>
+{% endblock %}
+
+{% block content %}
+
+<!-- Cabeçalho do relatório -->
+<div class="d-flex justify-content-between align-items-start mb-4 flex-wrap gap-2">
+  <div>
+    <h2 class="fw-bold mb-0">{{ r.client_name }}</h2>
+    <div class="text-muted small">
+      CPF: {{ r.cpf }}
+      &nbsp;|&nbsp; Ano-base: <strong>{{ r.year }}</strong>
+      {% if r.detected_year != r.year %}
+        &nbsp;|&nbsp; Proventos detectados em: <strong>{{ r.detected_year }}</strong>
+      {% endif %}
+    </div>
+  </div>
+  <div class="text-muted small text-end">
+    <i class="bi bi-calendar3 me-1"></i>Gerado em: {{ r.year }}
+    <br>
+    <span class="badge bg-secondary">
+      {{ r.diagnostics.negociacao_rows }} negociações &nbsp;|&nbsp;
+      {{ r.diagnostics.movimentacao_rows }} movimentações
+    </span>
+  </div>
+</div>
+
+<!-- Cards de resumo -->
+<div class="row g-3 mb-4">
+  <div class="col-sm-6 col-lg-3">
+    <div class="card summary-card h-100 shadow-sm">
+      <div class="card-body">
+        <div class="text-muted small mb-1"><i class="bi bi-briefcase me-1"></i>Custo Total Bens</div>
+        <div class="fs-5 fw-bold">R$ {{ "%.2f"|format(r.summary.total_assets_cost) }}</div>
+        <div class="text-muted small">{{ r.assets|length }} ativo(s)</div>
+      </div>
+    </div>
+  </div>
+  <div class="col-sm-6 col-lg-3">
+    <div class="card summary-card income h-100 shadow-sm">
+      <div class="card-body">
+        <div class="text-muted small mb-1"><i class="bi bi-cash-coin me-1"></i>Total Proventos</div>
+        <div class="fs-5 fw-bold">R$ {{ "%.2f"|format(r.summary.total_income) }}</div>
+        <div class="text-muted small">{{ r.income_events|length }} evento(s)</div>
+      </div>
+    </div>
+  </div>
+  <div class="col-sm-6 col-lg-3">
+    <div class="card summary-card {% if r.summary.net_gain >= 0 %}positive{% else %}negative{% endif %} h-100 shadow-sm">
+      <div class="card-body">
+        <div class="text-muted small mb-1"><i class="bi bi-graph-up-arrow me-1"></i>Ganho Líquido</div>
+        <div class="fs-5 fw-bold {% if r.summary.net_gain >= 0 %}gain-positive{% else %}gain-negative{% endif %}">
+          R$ {{ "%.2f"|format(r.summary.net_gain) }}
+        </div>
+        <div class="text-muted small">{{ r.sales|length }} venda(s)</div>
+      </div>
+    </div>
+  </div>
+  <div class="col-sm-6 col-lg-3">
+    <div class="card summary-card h-100 shadow-sm">
+      <div class="card-body">
+        <div class="text-muted small mb-1"><i class="bi bi-pie-chart me-1"></i>Composição Proventos</div>
+        <div class="small mt-1">
+          <div>Tipo 9 (Div): <strong>R$ {{ "%.2f"|format(r.summary.tax9) }}</strong></div>
+          <div>Tipo 10 (JCP): <strong>R$ {{ "%.2f"|format(r.summary.tax10) }}</strong></div>
+          <div>Tipo 26 (FII): <strong>R$ {{ "%.2f"|format(r.summary.tax26) }}</strong></div>
+        </div>
+      </div>
+    </div>
+  </div>
+</div>
+
+<!-- Alertas de validação -->
+{% if r.validation_issues %}
+<div class="alert alert-warning shadow-sm mb-4 no-print">
+  <div class="fw-semibold mb-1">
+    <i class="bi bi-exclamation-triangle-fill me-1"></i>
+    {{ r.validation_issues|length }} aviso(s) de validação
+  </div>
+  <ul class="mb-0 small">
+    {% for issue in r.validation_issues %}
+    <li>{{ issue.message }}</li>
+    {% endfor %}
+  </ul>
+</div>
+{% endif %}
+
+<!-- Abas -->
+<ul class="nav nav-tabs mb-3 no-print" id="report-tabs" role="tablist">
+  <li class="nav-item" role="presentation">
+    <button class="nav-link active" data-bs-toggle="tab" data-bs-target="#tab-assets" type="button">
+      <i class="bi bi-building me-1"></i>Bens &amp; Direitos
+      <span class="badge bg-primary rounded-pill ms-1">{{ r.assets|length }}</span>
+    </button>
+  </li>
+  <li class="nav-item" role="presentation">
+    <button class="nav-link" data-bs-toggle="tab" data-bs-target="#tab-income" type="button">
+      <i class="bi bi-cash-coin me-1"></i>Proventos
+      <span class="badge bg-primary rounded-pill ms-1">{{ r.income_events|length }}</span>
+    </button>
+  </li>
+  <li class="nav-item" role="presentation">
+    <button class="nav-link" data-bs-toggle="tab" data-bs-target="#tab-sales" type="button">
+      <i class="bi bi-graph-up me-1"></i>Lucro &amp; Prejuízo
+      <span class="badge bg-primary rounded-pill ms-1">{{ r.sales|length }}</span>
+    </button>
+  </li>
+  <li class="nav-item" role="presentation">
+    <button class="nav-link" data-bs-toggle="tab" data-bs-target="#tab-corporate" type="button">
+      <i class="bi bi-arrow-repeat me-1"></i>Eventos Corporativos
+      <span class="badge bg-primary rounded-pill ms-1">{{ r.corporate_events|length }}</span>
+    </button>
+  </li>
+  <li class="nav-item" role="presentation">
+    <button class="nav-link" data-bs-toggle="tab" data-bs-target="#tab-ops" type="button">
+      <i class="bi bi-list-ul me-1"></i>Operações
+      <span class="badge bg-secondary rounded-pill ms-1">{{ r.operations|length }}</span>
+    </button>
+  </li>
+</ul>
+
+<div class="tab-content" id="report-tabs-content">
+
+  <!-- ── Tab 1: Bens & Direitos ──────────────────────────────────────────────── -->
+  <div class="tab-pane fade show active" id="tab-assets" role="tabpanel">
+    {% if r.assets %}
+    <div class="card shadow-sm">
+      <div class="card-body p-0">
+        <div class="table-responsive">
+          <table class="table table-sm table-hover table-striped mb-0">
+            <thead class="table-dark">
+              <tr>
+                <th>Ticker</th>
+                <th>Nome</th>
+                <th>Tipo</th>
+                <th class="text-center">Grupo</th>
+                <th class="text-center">Código</th>
+                <th class="text-end">Quantidade</th>
+                <th class="text-end">CMPA (R$)</th>
+                <th class="text-end">Custo Total (R$)</th>
+                <th class="text-end">Dividendos (R$)</th>
+                <th class="text-end">JCP (R$)</th>
+                <th class="text-end">Rend. FII (R$)</th>
+                <th>Corretora</th>
+                <th>CNPJ Ativo</th>
+                <th>Discriminação IRPF</th>
+              </tr>
+            </thead>
+            <tbody>
+              {% for a in r.assets %}
+              <tr>
+                <td class="fw-semibold">{{ a.ticker }}</td>
+                <td>{{ a.full_name }}</td>
+                <td>
+                  {% if a.type == 'FII' %}
+                    <span class="badge bg-info text-dark">FII</span>
+                  {% elif a.type == 'BDR' %}
+                    <span class="badge bg-warning text-dark">BDR</span>
+                  {% elif a.type == 'ETF' %}
+                    <span class="badge bg-secondary">ETF</span>
+                  {% else %}
+                    <span class="badge bg-primary">Ação</span>
+                  {% endif %}
+                </td>
+                <td class="text-center"><code>{{ a.irpf_grupo }}</code></td>
+                <td class="text-center"><code>{{ a.irpf_codigo }}</code></td>
+                <td class="text-end">{{ a.quantity }}</td>
+                <td class="text-end">{{ "%.4f"|format(a.average_cost) }}</td>
+                <td class="text-end fw-semibold">{{ "%.2f"|format(a.total_cost) }}</td>
+                <td class="text-end {% if a.dividends > 0 %}gain-positive{% endif %}">
+                  {% if a.dividends > 0 %}{{ "%.2f"|format(a.dividends) }}{% else %}—{% endif %}
+                </td>
+                <td class="text-end {% if a.jcp > 0 %}gain-positive{% endif %}">
+                  {% if a.jcp > 0 %}{{ "%.2f"|format(a.jcp) }}{% else %}—{% endif %}
+                </td>
+                <td class="text-end {% if a.fii_income > 0 %}gain-positive{% endif %}">
+                  {% if a.fii_income > 0 %}{{ "%.2f"|format(a.fii_income) }}{% else %}—{% endif %}
+                </td>
+                <td class="text-muted small">{{ a.institution or '—' }}</td>
+                <td class="text-muted small">{{ a.asset_cnpj or '—' }}</td>
+                <td class="text-muted small" style="max-width:320px;white-space:normal;font-size:0.78rem">
+                  {{ a.discriminacao or '—' }}
+                </td>
+              </tr>
+              {% endfor %}
+            </tbody>
+            <tfoot class="table-secondary fw-semibold">
+              <tr>
+                <td colspan="7" class="text-end">Total</td>
+                <td class="text-end">{{ "%.2f"|format(r.summary.total_assets_cost) }}</td>
+                <td class="text-end gain-positive">{{ "%.2f"|format(r.summary.tax9) }}</td>
+                <td class="text-end gain-positive">{{ "%.2f"|format(r.summary.tax10) }}</td>
+                <td class="text-end gain-positive">{{ "%.2f"|format(r.summary.tax26) }}</td>
+                <td colspan="3"></td>
+              </tr>
+            </tfoot>
+          </table>
+        </div>
+      </div>
+    </div>
+    {% else %}
+    <div class="text-center text-muted py-5">
+      <i class="bi bi-inbox fs-1 d-block mb-2"></i>Nenhum ativo encontrado.
+    </div>
+    {% endif %}
+  </div>
+
+  <!-- ── Tab 2: Proventos ────────────────────────────────────────────────────── -->
+  <div class="tab-pane fade" id="tab-income" role="tabpanel">
+
+    <!-- Resumo por tipo IR -->
+    <div class="row g-3 mb-3">
+      <div class="col-md-4">
+        <div class="card border-primary shadow-sm">
+          <div class="card-body text-center">
+            <div class="text-muted small">Tipo 9 — Dividendos</div>
+            <div class="fs-5 fw-bold gain-positive">R$ {{ "%.2f"|format(r.summary.tax9) }}</div>
+          </div>
+        </div>
+      </div>
+      <div class="col-md-4">
+        <div class="card border-warning shadow-sm">
+          <div class="card-body text-center">
+            <div class="text-muted small">Tipo 10 — JCP</div>
+            <div class="fs-5 fw-bold" style="color:#e8a020;">R$ {{ "%.2f"|format(r.summary.tax10) }}</div>
+          </div>
+        </div>
+      </div>
+      <div class="col-md-4">
+        <div class="card border-info shadow-sm">
+          <div class="card-body text-center">
+            <div class="text-muted small">Tipo 26 — Rend. FII</div>
+            <div class="fs-5 fw-bold text-info">R$ {{ "%.2f"|format(r.summary.tax26) }}</div>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    {% if r.income_events %}
+    <div class="card shadow-sm">
+      <div class="card-body p-0">
+        <div class="table-responsive">
+          <table class="table table-sm table-hover table-striped mb-0">
+            <thead class="table-dark">
+              <tr>
+                <th>Data</th>
+                <th>Ticker</th>
+                <th>Tipo</th>
+                <th class="text-center">Tipo IR</th>
+                <th class="text-end">Qtd</th>
+                <th class="text-end">Unit. (R$)</th>
+                <th class="text-end">Valor (R$)</th>
+              </tr>
+            </thead>
+            <tbody>
+              {% for e in r.income_events %}
+              <tr>
+                <td>{{ e.date }}</td>
+                <td class="fw-semibold">{{ e.ticker }}</td>
+                <td>{{ e.type }}</td>
+                <td class="text-center">
+                  {% if e.ir_type == 9 %}
+                    <span class="badge bg-primary">Tipo 9</span>
+                  {% elif e.ir_type == 10 %}
+                    <span class="badge bg-warning text-dark">Tipo 10</span>
+                  {% else %}
+                    <span class="badge bg-info text-dark">Tipo 26</span>
+                  {% endif %}
+                </td>
+                <td class="text-end">{{ e.quantity }}</td>
+                <td class="text-end">{{ "%.4f"|format(e.unit_price) if e.unit_price else '—' }}</td>
+                <td class="text-end fw-semibold gain-positive">{{ "%.2f"|format(e.value) }}</td>
+              </tr>
+              {% endfor %}
+            </tbody>
+            <tfoot class="table-secondary fw-semibold">
+              <tr>
+                <td colspan="6" class="text-end">Total</td>
+                <td class="text-end gain-positive">{{ "%.2f"|format(r.summary.total_income) }}</td>
+              </tr>
+            </tfoot>
+          </table>
+        </div>
+      </div>
+    </div>
+    {% else %}
+    <div class="text-center text-muted py-5">
+      <i class="bi bi-inbox fs-1 d-block mb-2"></i>Nenhum provento encontrado.
+    </div>
+    {% endif %}
+  </div>
+
+  <!-- ── Tab 3: Lucro & Prejuízo ────────────────────────────────────────────── -->
+  <div class="tab-pane fade" id="tab-sales" role="tabpanel">
+
+    <!-- Resumo ganhos/perdas -->
+    <div class="row g-3 mb-3">
+      <div class="col-md-4">
+        <div class="card border-success shadow-sm">
+          <div class="card-body text-center">
+            <div class="text-muted small">Total Ganhos</div>
+            <div class="fs-5 fw-bold gain-positive">R$ {{ "%.2f"|format(r.summary.total_gain) }}</div>
+          </div>
+        </div>
+      </div>
+      <div class="col-md-4">
+        <div class="card border-danger shadow-sm">
+          <div class="card-body text-center">
+            <div class="text-muted small">Total Perdas</div>
+            <div class="fs-5 fw-bold gain-negative">R$ {{ "%.2f"|format(r.summary.total_loss) }}</div>
+          </div>
+        </div>
+      </div>
+      <div class="col-md-4">
+        <div class="card {% if r.summary.net_gain >= 0 %}border-success{% else %}border-danger{% endif %} shadow-sm">
+          <div class="card-body text-center">
+            <div class="text-muted small">Resultado Líquido</div>
+            <div class="fs-5 fw-bold {% if r.summary.net_gain >= 0 %}gain-positive{% else %}gain-negative{% endif %}">
+              R$ {{ "%.2f"|format(r.summary.net_gain) }}
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <!-- Resumo mensal -->
+    {% if r.monthly_sales %}
+    <div class="card shadow-sm mb-3">
+      <div class="card-header fw-semibold">
+        <i class="bi bi-calendar3 me-1"></i>Resumo Mensal (DARF)
+      </div>
+      <div class="card-body p-0">
+        <div class="table-responsive">
+          <table class="table table-sm table-hover mb-0">
+            <thead class="table-secondary">
+              <tr>
+                <th>Mês/Ano</th>
+                <th class="text-end">Nº Vendas</th>
+                <th class="text-end">Ganhos (R$)</th>
+                <th class="text-end">Perdas (R$)</th>
+                <th class="text-end">Resultado (R$)</th>
+              </tr>
+            </thead>
+            <tbody>
+              {% for month, data in r.monthly_sales.items()|sort %}
+              <tr>
+                <td>{{ month }}</td>
+                <td class="text-end">{{ data.count }}</td>
+                <td class="text-end gain-positive">{{ "%.2f"|format(data.gain) }}</td>
+                <td class="text-end gain-negative">{{ "%.2f"|format(data.loss) }}</td>
+                <td class="text-end fw-semibold {% if data.net >= 0 %}gain-positive{% else %}gain-negative{% endif %}">
+                  {{ "%.2f"|format(data.net) }}
+                </td>
+              </tr>
+              {% endfor %}
+            </tbody>
+          </table>
+        </div>
+      </div>
+    </div>
+    {% endif %}
+
+    <!-- Detalhamento das vendas -->
+    {% if r.sales %}
+    <div class="card shadow-sm">
+      <div class="card-header fw-semibold">
+        <i class="bi bi-list-check me-1"></i>Detalhamento de Vendas
+      </div>
+      <div class="card-body p-0">
+        <div class="table-responsive">
+          <table class="table table-sm table-hover table-striped mb-0">
+            <thead class="table-dark">
+              <tr>
+                <th>Data</th>
+                <th>Ticker</th>
+                <th class="text-end">Qtd</th>
+                <th class="text-end">Preço Venda (R$)</th>
+                <th class="text-end">CMPA (R$)</th>
+                <th class="text-end">Base de Custo (R$)</th>
+                <th class="text-end">Ganho/Perda (R$)</th>
+              </tr>
+            </thead>
+            <tbody>
+              {% for s in r.sales %}
+              <tr>
+                <td>{{ s.date }}</td>
+                <td class="fw-semibold">{{ s.ticker }}</td>
+                <td class="text-end">{{ s.quantity }}</td>
+                <td class="text-end">{{ "%.2f"|format(s.sale_price) }}</td>
+                <td class="text-end">{{ "%.4f"|format(s.cmpa_at_sale) }}</td>
+                <td class="text-end">{{ "%.2f"|format(s.cost_basis) }}</td>
+                <td class="text-end fw-semibold {% if s.gain >= 0 %}gain-positive{% else %}gain-negative{% endif %}">
+                  {{ "%.2f"|format(s.gain) }}
+                </td>
+              </tr>
+              {% endfor %}
+            </tbody>
+          </table>
+        </div>
+      </div>
+    </div>
+    {% else %}
+    <div class="text-center text-muted py-5">
+      <i class="bi bi-inbox fs-1 d-block mb-2"></i>Nenhuma venda encontrada.
+    </div>
+    {% endif %}
+  </div>
+
+  <!-- ── Tab 4: Eventos Corporativos ────────────────────────────────────────── -->
+  <div class="tab-pane fade" id="tab-corporate" role="tabpanel">
+    {% if r.corporate_events %}
+    <div class="card shadow-sm">
+      <div class="card-body p-0">
+        <div class="table-responsive">
+          <table class="table table-sm table-hover table-striped mb-0">
+            <thead class="table-dark">
+              <tr>
+                <th>Data</th>
+                <th>Ticker</th>
+                <th>Tipo</th>
+                <th>Descrição</th>
+                <th class="text-end">Δ Quantidade</th>
+              </tr>
+            </thead>
+            <tbody>
+              {% for e in r.corporate_events %}
+              <tr>
+                <td>{{ e.date }}</td>
+                <td class="fw-semibold">{{ e.ticker }}</td>
+                <td>
+                  {% if e.type == 'Bonificação' %}
+                    <span class="badge bg-success">{{ e.type }}</span>
+                  {% elif e.type == 'Desdobramento' %}
+                    <span class="badge bg-primary">{{ e.type }}</span>
+                  {% elif e.type == 'Agrupamento' %}
+                    <span class="badge bg-warning text-dark">{{ e.type }}</span>
+                  {% else %}
+                    <span class="badge bg-secondary">{{ e.type }}</span>
+                  {% endif %}
+                </td>
+                <td class="text-muted small">{{ e.details }}</td>
+                <td class="text-end fw-semibold {% if e.quantity_change > 0 %}gain-positive{% else %}gain-negative{% endif %}">
+                  {{ '+' if e.quantity_change > 0 else '' }}{{ e.quantity_change }}
+                </td>
+              </tr>
+              {% endfor %}
+            </tbody>
+          </table>
+        </div>
+      </div>
+    </div>
+    {% else %}
+    <div class="text-center text-muted py-5">
+      <i class="bi bi-inbox fs-1 d-block mb-2"></i>Nenhum evento corporativo encontrado.
+    </div>
+    {% endif %}
+  </div>
+
+  <!-- ── Tab 5: Operações ────────────────────────────────────────────────────── -->
+  <div class="tab-pane fade" id="tab-ops" role="tabpanel">
+    {% if r.operations %}
+    <div class="card shadow-sm">
+      <div class="card-body p-0">
+        <div class="table-responsive" style="max-height: 600px; overflow-y: auto;">
+          <table class="table table-sm table-hover table-striped mb-0">
+            <thead class="table-dark sticky-top">
+              <tr>
+                <th>Data</th>
+                <th>Ticker</th>
+                <th>Tipo</th>
+                <th class="text-end">Qtd</th>
+                <th class="text-end">Unit. (R$)</th>
+                <th class="text-end">Valor (R$)</th>
+                <th>Corretora</th>
+                <th>Nota</th>
+              </tr>
+            </thead>
+            <tbody>
+              {% for o in r.operations %}
+              <tr class="{% if o.type == 'Movimentação Duplicada' %}table-warning{% elif o.type == 'Evento Suspeito' %}table-danger{% endif %}">
+                <td>{{ o.date }}</td>
+                <td class="fw-semibold">{{ o.ticker }}</td>
+                <td>
+                  {% if o.type == 'Compra' %}
+                    <span class="badge bg-success">{{ o.type }}</span>
+                  {% elif o.type == 'Venda' %}
+                    <span class="badge bg-danger">{{ o.type }}</span>
+                  {% elif o.type == 'Movimentação Duplicada' %}
+                    <span class="badge bg-warning text-dark">Duplicada</span>
+                  {% else %}
+                    <span class="badge bg-secondary">{{ o.type }}</span>
+                  {% endif %}
+                </td>
+                <td class="text-end">{{ o.quantity }}</td>
+                <td class="text-end">{{ "%.4f"|format(o.unit_price) if o.unit_price else '—' }}</td>
+                <td class="text-end">{{ "%.2f"|format(o.value) if o.value else '—' }}</td>
+                <td class="text-muted small">{{ o.institution or '—' }}</td>
+                <td class="text-muted small">{{ o.note or '' }}</td>
+              </tr>
+              {% endfor %}
+            </tbody>
+          </table>
+        </div>
+      </div>
+    </div>
+    {% else %}
+    <div class="text-center text-muted py-5">
+      <i class="bi bi-inbox fs-1 d-block mb-2"></i>Nenhuma operação encontrada.
+    </div>
+    {% endif %}
+  </div>
+
+</div><!-- /tab-content -->
+
+<!-- Aviso de audit log (colapsável) -->
+{% if r.audit_log %}
+<div class="mt-4 no-print">
+  <details>
+    <summary class="fw-semibold text-muted" style="cursor:pointer;">
+      <i class="bi bi-bug me-1"></i>Log de Auditoria ({{ r.audit_log|length }} entrada(s))
+    </summary>
+    <div class="table-responsive mt-2">
+      <table class="table table-sm table-bordered small">
+        <thead class="table-secondary">
+          <tr><th>Data</th><th>Ticker</th><th>Evento</th><th>Ação</th><th>Motivo</th></tr>
+        </thead>
+        <tbody>
+          {% for a in r.audit_log %}
+          <tr>
+            <td>{{ a.date }}</td>
+            <td>{{ a.ticker }}</td>
+            <td>{{ a.event }}</td>
+            <td><span class="badge bg-secondary">{{ a.action }}</span></td>
+            <td>{{ a.reason }}</td>
+          </tr>
+          {% endfor %}
+        </tbody>
+      </table>
+    </div>
+  </details>
+</div>
+{% endif %}
+
+{% endblock %}

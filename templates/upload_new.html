@@ -1,0 +1,226 @@
+{% extends "base_new.html" %}
+{% block title %}Upload — IRPF B3{% endblock %}
+
+{% block content %}
+<div class="container py-4">
+  <div class="row justify-content-center mb-4">
+    <div class="col-lg-10">
+      <div class="text-center mb-5">
+        <h1 class="fw-bold mb-2">
+          <i class="bi bi-cloud-upload me-2"></i>IRPF Renda Variável B3
+        </h1>
+        <p class="text-muted fs-5 mb-0">
+          Processamento de arquivos B3 com conformidade fiscal e cálculo de imposto de renda
+        </p>
+      </div>
+
+      <!-- Formulário de parametrização e upload -->
+      <form id="upload-form" class="needs-validation" novalidate>
+        
+        <!-- Seção 1: Dados do Contribuinte -->
+        <div class="card shadow-sm mb-4 border-0">
+          <div class="card-header fw-bold bg-light border-0" style="color: var(--brand);">
+            <i class="bi bi-person-fill me-2"></i>Dados do Contribuinte
+          </div>
+          <div class="card-body">
+            <div class="row g-3">
+              <div class="col-md-5">
+                <label class="form-label fw-semibold">Nome completo *</label>
+                <input type="text" class="form-control" name="client_name" 
+                       placeholder="Nome do contribuinte" required />
+                <div class="invalid-feedback">Nome é obrigatório</div>
+              </div>
+              <div class="col-md-3">
+                <label class="form-label fw-semibold">CPF *</label>
+                <input type="text" class="form-control" name="cpf" 
+                       placeholder="000.000.000-00" pattern="\d{3}\.\d{3}\.\d{3}-\d{2}" required />
+                <div class="invalid-feedback">CPF inválido</div>
+              </div>
+              <div class="col-md-2">
+                <label class="form-label fw-semibold">Ano-base *</label>
+                <select class="form-select" name="year" required>
+                  <option value="">Selecione...</option>
+                  <option value="2025" selected>2025</option>
+                  <option value="2024">2024</option>
+                  <option value="2023">2023</option>
+                </select>
+                <div class="invalid-feedback">Ano é obrigatório</div>
+              </div>
+            </div>
+          </div>
+        </div>
+
+        <!-- Seção 2: Dados da Custodiante (Parametrização) -->
+        <div class="card shadow-sm mb-4 border-0">
+          <div class="card-header fw-bold bg-light border-0" style="color: var(--brand);">
+            <i class="bi bi-building me-2"></i>Custodiante / Corretora
+          </div>
+          <div class="card-body">
+            <div class="row g-3">
+              <div class="col-md-4">
+                <label class="form-label fw-semibold">CNPJ da Custodiante</label>
+                <input type="text" class="form-control" name="cnpj_custodiante" 
+                       placeholder="00.000.000/0000-00" pattern="\d{2}\.\d{3}\.\d{3}/\d{4}-\d{2}" />
+                <small class="text-muted">Ex: XP Investimentos, Clear Corretora</small>
+              </div>
+              <div class="col-md-8">
+                <label class="form-label fw-semibold">Nome da Custodiante</label>
+                <input type="text" class="form-control" name="custodiante_nome" 
+                       placeholder="Nome da instituição" />
+              </div>
+            </div>
+          </div>
+        </div>
+
+        <!-- Seção 3: Upload de arquivos B3 -->
+        <div class="card shadow-sm mb-4 border-0">
+          <div class="card-header fw-bold bg-light border-0" style="color: var(--brand);">
+            <i class="bi bi-file-earmark-spreadsheet me-2"></i>Arquivos de Exportação B3
+          </div>
+          <div class="card-body">
+            <div class="row g-4">
+
+              <!-- Movimentação (obrigatório) -->
+              <div class="col-md-4">
+                <div class="d-flex align-items-center mb-2">
+                  <label class="form-label fw-semibold mb-0">Movimentação</label>
+                  <span class="badge bg-danger ms-2">Obrigatório</span>
+                </div>
+                <div class="drop-zone" id="zone-mov">
+                  <div class="icon"><i class="bi bi-file-earmark-excel"></i></div>
+                  <div class="drop-label text-muted small">
+                    Arraste ou clique para selecionar
+                    <div class="text-muted" style="font-size:.78rem;">Movimentacao.xlsx</div>
+                  </div>
+                  <input type="file" name="movimentacao" accept=".xlsx,.xls" class="d-none" id="input-mov" />
+                </div>
+                <div class="form-text mt-2">
+                  <i class="bi bi-info-circle"></i> investor.b3.com.br → Extratos → Movimentação
+                </div>
+              </div>
+
+              <!-- Negociação (opcional) -->
+              <div class="col-md-4">
+                <div class="d-flex align-items-center mb-2">
+                  <label class="form-label fw-semibold mb-0">Negociação</label>
+                  <span class="badge bg-secondary ms-2">Opcional</span>
+                </div>
+                <div class="drop-zone" id="zone-neg">
+                  <div class="icon"><i class="bi bi-file-earmark-excel"></i></div>
+                  <div class="drop-label text-muted small">
+                    Arraste ou clique para selecionar
+                    <div class="text-muted" style="font-size:.78rem;">Negociacao.xlsx</div>
+                  </div>
+                  <input type="file" name="negociacao" accept=".xlsx,.xls" class="d-none" id="input-neg" />
+                </div>
+                <div class="form-text mt-2">
+                  <i class="bi bi-info-circle"></i> investor.b3.com.br → Extratos → Negociação
+                </div>
+              </div>
+
+              <!-- Informe de Rendimentos PDF (opcional) -->
+              <div class="col-md-4">
+                <div class="d-flex align-items-center mb-2">
+                  <label class="form-label fw-semibold mb-0">Informe de Rendimentos</label>
+                  <span class="badge bg-secondary ms-2">Opcional</span>
+                </div>
+                <div class="drop-zone" id="zone-inf">
+                  <div class="icon"><i class="bi bi-file-earmark-pdf"></i></div>
+                  <div class="drop-label text-muted small">
+                    Arraste ou clique para selecionar
+                    <div class="text-muted" style="font-size:.78rem;">Informe.pdf</div>
+                  </div>
+                  <input type="file" name="informe" accept=".pdf" class="d-none" id="input-inf" />
+                </div>
+                <div class="form-text mt-2">
+                  <i class="bi bi-info-circle"></i> Informe de Rendimentos da corretora
+                </div>
+              </div>
+
+            </div>
+          </div>
+        </div>
+
+        <!-- Dicas -->
+        <div class="card border-0 bg-body-tertiary mb-4">
+          <div class="card-body">
+            <h6 class="fw-semibold mb-3">
+              <i class="bi bi-lightbulb-fill me-1" style="color: var(--accent);"></i>
+              Como exportar os arquivos da B3
+            </h6>
+            <ol class="mb-0 small text-muted">
+              <li>Acesse <strong>investor.b3.com.br</strong> e faça login com sua conta Gov.br</li>
+              <li>Vá em <strong>Extratos e Informativos → Movimentação</strong> e exporte o período desejado em Excel</li>
+              <li>(Opcional) Vá em <strong>Extratos e Informativos → Negociação</strong> e exporte em Excel</li>
+              <li>(Opcional) Baixe o <strong>Informe de Rendimentos</strong> em PDF da sua corretora</li>
+              <li>Retorne aqui e faça o upload dos arquivos para processar</li>
+            </ol>
+          </div>
+        </div>
+
+        <!-- Botão de envio -->
+        <div class="d-grid">
+          <button type="submit" class="btn btn-lg text-white fw-semibold" 
+                  style="background-color: var(--brand);" id="submit-btn">
+            <i class="bi bi-gear-fill me-2" id="submit-icon"></i>
+            <span id="submit-label">Processar Arquivos</span>
+          </button>
+        </div>
+
+      </form>
+    </div>
+  </div>
+</div>
+
+{% endblock %}
+
+{% block scripts %}
+<script>
+  // Validação e envio do formulário
+  const form = document.getElementById('upload-form');
+  const submitBtn = document.getElementById('submit-btn');
+  const submitIcon = document.getElementById('submit-icon');
+  const submitLabel = document.getElementById('submit-label');
+
+  form.addEventListener('submit', async (e) => {
+    e.preventDefault();
+    
+    if (!form.checkValidity() === false) {
+      e.stopPropagation();
+    }
+
+    form.classList.add('was-validated');
+
+    if (!form.checkValidity()) return;
+
+    // Desabilitar botão e mostrar loading
+    submitBtn.disabled = true;
+    submitIcon.classList.add('spin');
+    submitLabel.textContent = 'Processando...';
+
+    try {
+      const formData = new FormData(form);
+      const cpf = formData.get('client_name');
+      const response = await fetch('/upload', {
+        method: 'POST',
+        body: formData
+      });
+
+      if (response.ok) {
+        const data = await response.json();
+        // Redirecionar para página de relatório
+        // window.location.href = `/report/${data.report_id}`;
+        alert('Arquivos processados com sucesso!');
+      } else {
+        alert('Erro ao processar arquivos');
+      }
+    } catch (error) {
+      alert(`Erro: ${error.message}`);
+    } finally {
+      submitBtn.disabled = false;
+      submitIcon.classList.remove('spin');
+      submitLabel.textContent = 'Processar Arquivos';
+    }
+  });
+</script>
+{% endblock %}

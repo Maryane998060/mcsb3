@@ -1,0 +1,19 @@
+/* Estilos específicos da página de relatório */
+
+/* Cabeçalho de seção de auditoria */
+details > summary {
+  list-style: none;
+}
+details > summary::before {
+  content: '▶ ';
+  font-size: .8em;
+}
+details[open] > summary::before {
+  content: '▼ ';
+}
+
+/* Tabela de operações com scroll vertical */
+#tab-ops .table-responsive {
+  max-height: 600px;
+  overflow-y: auto;
+}

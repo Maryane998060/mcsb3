@@ -1,0 +1,270 @@
+{% extends "base_new.html" %}
+{% block title %}Relatório IRPF — {{ cliente.nome }}{% endblock %}
+
+{% block nav_extra %}
+  <a href="/export/excel/{{ cliente.id }}" class="btn btn-sm btn-success">
+    <i class="bi bi-file-earmark-excel me-1"></i>Exportar Excel
+  </a>
+  <button class="btn btn-sm btn-outline-light" onclick="window.print()">
+    <i class="bi bi-printer me-1"></i>Imprimir / PDF
+  </button>
+  <a href="/" class="btn btn-sm btn-outline-light">
+    <i class="bi bi-arrow-left me-1"></i>Novo
+  </a>
+{% endblock %}
+
+{% block content %}
+<div class="container py-4">
+  <div class="row mb-3 align-items-start">
+    <div class="col-md-8">
+      <h2 class="fw-bold mb-0">{{ cliente.nome }}</h2>
+      <div class="text-muted small">CPF: {{ cliente.cpf }} | Ano-base: <strong>{{ cliente.ano_fiscal }}</strong></div>
+    </div>
+    <div class="col-md-4 text-end small text-muted">
+      Gerado em: {{ data_geracao }}
+      <br>
+      <span class="badge bg-secondary">{{ diagnostics.negociacao_rows }} negociações | {{ diagnostics.movimentacao_rows }} movimentações</span>
+    </div>
+  </div>
+
+  <!-- Cards resumo -->
+  <div class="row g-3 mb-4">
+    <div class="col-sm-6 col-lg-3">
+      <div class="card summary-card h-100 shadow-sm">
+        <div class="card-body">
+          <div class="text-muted small mb-1">Custo Total Bens</div>
+          <div class="fs-5 fw-bold">R$ {{ "%.2f"|format(summary.total_assets_cost) }}</div>
+          <div class="text-muted small">{{ assets|length }} ativo(s)</div>
+        </div>
+      </div>
+    </div>
+    <div class="col-sm-6 col-lg-3">
+      <div class="card summary-card income h-100 shadow-sm">
+        <div class="card-body">
+          <div class="text-muted small mb-1">Total Proventos</div>
+          <div class="fs-5 fw-bold">R$ {{ "%.2f"|format(summary.total_income) }}</div>
+          <div class="text-muted small">{{ income_events|length }} evento(s)</div>
+        </div>
+      </div>
+    </div>
+    <div class="col-sm-6 col-lg-3">
+      <div class="card summary-card {% if summary.net_gain >= 0 %}positive{% else %}negative{% endif %} h-100 shadow-sm">
+        <div class="card-body">
+          <div class="text-muted small mb-1">Ganho Líquido</div>
+          <div class="fs-5 fw-bold {% if summary.net_gain >= 0 %}gain-positive{% else %}gain-negative{% endif %}">R$ {{ "%.2f"|format(summary.net_gain) }}</div>
+          <div class="text-muted small">{{ sales|length }} venda(s)</div>
+        </div>
+      </div>
+    </div>
+    <div class="col-sm-6 col-lg-3">
+      <div class="card summary-card h-100 shadow-sm">
+        <div class="card-body">
+          <div class="text-muted small mb-1">Composição Proventos</div>
+          <div class="small mt-1">
+            <div>Tipo 9 (Div): <strong>R$ {{ "%.2f"|format(summary.tax9) }}</strong></div>
+            <div>Tipo 10 (JCP): <strong>R$ {{ "%.2f"|format(summary.tax10) }}</strong></div>
+            <div>Tipo 26 (FII): <strong>R$ {{ "%.2f"|format(summary.tax26) }}</strong></div>
+          </div>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <!-- Abas -->
+  <ul class="nav nav-tabs mb-3 no-print" id="report-tabs" role="tablist">
+    <li class="nav-item" role="presentation">
+      <button class="nav-link active" data-bs-toggle="tab" data-bs-target="#tab-assets" type="button">Bens & Direitos <span class="badge bg-primary rounded-pill ms-1">{{ assets|length }}</span></button>
+    </li>
+    <li class="nav-item" role="presentation">
+      <button class="nav-link" data-bs-toggle="tab" data-bs-target="#tab-income" type="button">Proventos <span class="badge bg-primary rounded-pill ms-1">{{ income_events|length }}</span></button>
+    </li>
+    <li class="nav-item" role="presentation">
+      <button class="nav-link" data-bs-toggle="tab" data-bs-target="#tab-sales" type="button">Lucro & Prejuízo <span class="badge bg-primary rounded-pill ms-1">{{ sales|length }}</span></button>
+    </li>
+    <li class="nav-item" role="presentation">
+      <button class="nav-link" data-bs-toggle="tab" data-bs-target="#tab-corporate" type="button">Eventos Corporativos <span class="badge bg-primary rounded-pill ms-1">{{ corporate_events|length }}</span></button>
+    </li>
+    <li class="nav-item" role="presentation">
+      <button class="nav-link" data-bs-toggle="tab" data-bs-target="#tab-ops" type="button">Operações <span class="badge bg-secondary rounded-pill ms-1">{{ operations|length }}</span></button>
+    </li>
+  </ul>
+
+  <div class="tab-content" id="report-tabs-content">
+
+    <!-- Tab Bens -->
+    <div class="tab-pane fade show active" id="tab-assets" role="tabpanel">
+      {% if assets %}
+      <div class="card shadow-sm">
+        <div class="card-body p-0">
+          <div class="table-responsive">
+            <table class="table table-sm table-hover table-striped mb-0">
+              <thead class="table-dark">
+                <tr>
+                  <th>Código IRPF</th>
+                  <th>Ticker</th>
+                  <th>CNPJ</th>
+                  <th>Descrição</th>
+                  <th>Quantidade</th>
+                  <th>CMPA</th>
+                  <th>Valor (31/12)</th>
+                </tr>
+              </thead>
+              <tbody>
+                {% for a in assets %}
+                <tr>
+                  <td>{{ a.codigo_irpf }}</td>
+                  <td>{{ a.ticker }}</td>
+                  <td>{{ a.cnpj or '' }}</td>
+                  <td>{{ a.descricao }}</td>
+                  <td>{{ a.quantidade }}</td>
+                  <td>{{ a.cmpa }}</td>
+                  <td>R$ {{ "%.2f"|format(a.valor_31_12) }}</td>
+                </tr>
+                {% endfor %}
+              </tbody>
+            </table>
+          </div>
+        </div>
+      </div>
+      {% else %}
+      <div class="alert alert-secondary">Nenhum ativo registrado.</div>
+      {% endif %}
+    </div>
+
+    <!-- Tab Proventos -->
+    <div class="tab-pane fade" id="tab-income" role="tabpanel">
+      {% if income_events %}
+      <div class="card shadow-sm">
+        <div class="card-body p-0">
+          <div class="table-responsive">
+            <table class="table table-sm table-hover table-striped mb-0">
+              <thead class="table-dark">
+                <tr>
+                  <th>Data</th>
+                  <th>Tipo</th>
+                  <th>Ticker</th>
+                  <th>Valor</th>
+                  <th>Natureza</th>
+                </tr>
+              </thead>
+              <tbody>
+                {% for e in income_events %}
+                <tr>
+                  <td>{{ e.data_evento }}</td>
+                  <td>{{ e.tipo }}</td>
+                  <td>{{ e.ticker }}</td>
+                  <td>R$ {{ "%.2f"|format(e.valor_total) }}</td>
+                  <td>{{ e.natureza or '' }}</td>
+                </tr>
+                {% endfor %}
+              </tbody>
+            </table>
+          </div>
+        </div>
+      </div>
+      {% else %}
+      <div class="alert alert-secondary">Nenhum provento encontrado.</div>
+      {% endif %}
+    </div>
+
+    <!-- Tab Lucro & Prejuízo -->
+    <div class="tab-pane fade" id="tab-sales" role="tabpanel">
+      <div class="card shadow-sm">
+        <div class="card-body p-0">
+          <div class="table-responsive">
+            <table class="table table-sm table-hover table-striped mb-0">
+              <thead class="table-dark">
+                <tr>
+                  <th>Data</th>
+                  <th>Ticker</th>
+                  <th>Quantidade</th>
+                  <th>Preço Venda</th>
+                  <th>CMPA na venda</th>
+                  <th>Lucro/Prejuízo</th>
+                </tr>
+              </thead>
+              <tbody>
+                {% for s in sales %}
+                <tr>
+                  <td>{{ s.data_operacao }}</td>
+                  <td>{{ s.ticker }}</td>
+                  <td>{{ s.quantidade }}</td>
+                  <td>R$ {{ "%.2f"|format(s.preco_unitario) }}</td>
+                  <td>R$ {{ "%.4f"|format(s.custo_medio_na_operacao or 0) }}</td>
+                  <td>R$ {{ "%.2f"|format(s.lucro_prejuizo or 0) }}</td>
+                </tbody>
+                {% endfor %}
+            </table>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <!-- Tab Eventos Corporativos -->
+    <div class="tab-pane fade" id="tab-corporate" role="tabpanel">
+      <div class="card shadow-sm">
+        <div class="card-body p-0">
+          <div class="table-responsive">
+            <table class="table table-sm table-hover table-striped mb-0">
+              <thead class="table-dark">
+                <tr>
+                  <th>Data</th>
+                  <th>Tipo</th>
+                  <th>Ticker</th>
+                  <th>Descrição</th>
+                </tr>
+              </thead>
+              <tbody>
+                {% for c in corporate_events %}
+                <tr>
+                  <td>{{ c.data_evento }}</td>
+                  <td>{{ c.tipo }}</td>
+                  <td>{{ c.ticker }}</td>
+                  <td>{{ c.descricao }}</td>
+                </tr>
+                {% endfor %}
+              </tbody>
+            </table>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <!-- Tab Operações -->
+    <div class="tab-pane fade" id="tab-ops" role="tabpanel">
+      <div class="card shadow-sm">
+        <div class="card-body p-0">
+          <div class="table-responsive">
+            <table class="table table-sm table-hover table-striped mb-0">
+              <thead class="table-dark">
+                <tr>
+                  <th>Data</th>
+                  <th>Tipo</th>
+                  <th>Ticker</th>
+                  <th>Quantidade</th>
+                  <th>Preço Unit.</th>
+                  <th>Valor Total</th>
+                </tr>
+              </thead>
+              <tbody>
+                {% for o in operations %}
+                <tr>
+                  <td>{{ o.data_operacao }}</td>
+                  <td>{{ o.tipo }}</td>
+                  <td>{{ o.ticker }}</td>
+                  <td>{{ o.quantidade }}</td>
+                  <td>R$ {{ "%.4f"|format(o.preco_unitario) }}</td>
+                  <td>R$ {{ "%.2f"|format(o.valor_total) }}</td>
+                </tr>
+                {% endfor %}
+              </tbody>
+            </table>
+          </div>
+        </div>
+      </div>
+    </div>
+
+  </div>
+</div>
+
+{% endblock %}

@@ -1,0 +1,243 @@
+<!DOCTYPE html>
+<html lang="pt-BR" data-bs-theme="light">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>{% block title %}IRPF Renda Variável B3{% endblock %}</title>
+  <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.3/dist/css/bootstrap.min.css" />
+  <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/bootstrap-icons@1.11.3/font/bootstrap-icons.min.css" />
+  <style>
+    :root {
+      --brand: #1e3a5f;
+      --brand-light: #2e5491;
+      --accent: #e8a020;
+    }
+
+    body {
+      font-size: .92rem;
+    }
+
+    /* Navbar */
+    .navbar {
+      background-color: var(--brand) !important;
+    }
+
+    .navbar-brand {
+      font-weight: 700;
+      color: white !important;
+      font-size: 1.2rem;
+    }
+
+    .navbar-brand i {
+      margin-right: 0.5rem;
+    }
+
+    /* Theme toggle */
+    #theme-toggle {
+      cursor: pointer;
+    }
+
+    /* Cards de resumo */
+    .summary-card {
+      border-left: 4px solid var(--brand);
+      transition: transform 0.2s;
+    }
+
+    .summary-card:hover {
+      transform: translateY(-2px);
+      box-shadow: 0 4px 12px rgba(0,0,0,0.1) !important;
+    }
+
+    .summary-card.positive { border-color: #198754; }
+    .summary-card.negative { border-color: #dc3545; }
+    .summary-card.income { border-color: #0d6efd; }
+
+    .gain-positive {
+      color: #198754;
+      font-weight: 600;
+    }
+
+    .gain-negative {
+      color: #dc3545;
+      font-weight: 600;
+    }
+
+    /* Tabelas */
+    .table-sm td,
+    .table-sm th {
+      vertical-align: middle;
+      padding: 0.5rem;
+    }
+
+    .table-hover tbody tr:hover {
+      background-color: rgba(30, 58, 95, 0.05);
+    }
+
+    /* Abas */
+    .nav-tabs {
+      border-bottom: 2px solid #dee2e6;
+    }
+
+    .nav-tabs .nav-link {
+      color: #6c757d;
+      border: none;
+      border-bottom: 3px solid transparent;
+      font-weight: 500;
+    }
+
+    .nav-tabs .nav-link.active {
+      color: var(--brand);
+      border-color: var(--brand);
+      background: none;
+    }
+
+    .nav-tabs .nav-link:hover:not(.active) {
+      border-color: #dee2e6;
+    }
+
+    /* Drop zones */
+    .drop-zone {
+      border: 2px dashed #d0d0d0;
+      border-radius: 8px;
+      padding: 2rem;
+      text-align: center;
+      cursor: pointer;
+      transition: all 0.3s;
+      background-color: #f9f9f9;
+    }
+
+    .drop-zone:hover {
+      border-color: var(--brand);
+      background-color: #f0f5ff;
+    }
+
+    .drop-zone.dragover {
+      border-color: var(--brand);
+      background-color: #e8f1ff;
+      transform: scale(1.02);
+    }
+
+    .drop-zone.has-file {
+      border-color: #198754;
+      background-color: #f1f9f5;
+    }
+
+    .drop-zone .icon {
+      font-size: 2.5rem;
+      color: var(--brand);
+      margin-bottom: 0.5rem;
+    }
+
+    .drop-zone.has-file .icon {
+      color: #198754;
+    }
+
+    /* Print styles */
+    @media print {
+      .no-print {
+        display: none !important;
+      }
+      body {
+        background-color: white;
+      }
+    }
+
+    /* Spinner */
+    @keyframes spin {
+      to { transform: rotate(360deg); }
+    }
+
+    .spin {
+      display: inline-block;
+      animation: spin 1s linear infinite;
+    }
+
+    /* Badges */
+    .badge {
+      font-size: 0.75rem;
+      padding: 0.35em 0.65em;
+    }
+  </style>
+  {% block page_css %}{% endblock %}
+</head>
+<body>
+
+<nav class="navbar navbar-expand-lg navbar-dark shadow-sm mb-4 no-print">
+  <div class="container-fluid">
+    <a class="navbar-brand" href="/">
+      <i class="bi bi-bar-chart-fill"></i>IRPF B3
+    </a>
+    <button class="navbar-toggler" type="button" data-bs-toggle="collapse" data-bs-target="#navbarNav">
+      <span class="navbar-toggler-icon"></span>
+    </button>
+    <div class="collapse navbar-collapse" id="navbarNav">
+      <div class="ms-auto d-flex align-items-center gap-2">
+        {% block nav_extra %}{% endblock %}
+        <button id="theme-toggle" class="btn btn-sm btn-outline-light" title="Alternar tema">
+          <i class="bi bi-moon-fill" id="theme-icon"></i>
+        </button>
+      </div>
+    </div>
+  </div>
+</nav>
+
+<div class="container-fluid pb-5">
+  {% block content %}{% endblock %}
+</div>
+
+<footer class="mt-5 py-3 bg-light border-top no-print">
+  <div class="container-fluid text-center text-muted small">
+    <p class="mb-1">IRPF Renda Variável B3 v2.0 — Gestão de Carteira com Conformidade Fiscal</p>
+    <p class="mb-0">© 2026 — Sistema de Cálculo de Imposto de Renda sobre Ganho de Capital</p>
+  </div>
+</footer>
+
+<script src="https://cdn.jsdelivr.net/npm/bootstrap@5.3.3/dist/js/bootstrap.bundle.min.js"></script>
+<script>
+  // ── Tema claro/escuro ────────────────────────────────────────────────────────
+  const html = document.documentElement;
+  const btn = document.getElementById('theme-toggle');
+  const icon = document.getElementById('theme-icon');
+  const savedTheme = localStorage.getItem('theme') || 'light';
+  html.setAttribute('data-bs-theme', savedTheme);
+  icon.className = savedTheme === 'dark' ? 'bi bi-sun-fill' : 'bi bi-moon-fill';
+
+  btn.addEventListener('click', () => {
+    const next = html.getAttribute('data-bs-theme') === 'dark' ? 'light' : 'dark';
+    html.setAttribute('data-bs-theme', next);
+    icon.className = next === 'dark' ? 'bi bi-sun-fill' : 'bi bi-moon-fill';
+    localStorage.setItem('theme', next);
+  });
+
+  // ── Drag & drop para drop-zones ──────────────────────────────────────────────
+  document.querySelectorAll('.drop-zone').forEach(zone => {
+    const input = zone.querySelector('input[type=file]');
+    if (!input) return;
+
+    zone.addEventListener('click', () => input.click());
+    zone.addEventListener('dragover', e => { e.preventDefault(); zone.classList.add('dragover'); });
+    zone.addEventListener('dragleave', () => zone.classList.remove('dragover'));
+    zone.addEventListener('drop', e => {
+      e.preventDefault();
+      zone.classList.remove('dragover');
+      if (e.dataTransfer.files.length) {
+        input.files = e.dataTransfer.files;
+        updateZoneLabel(zone, e.dataTransfer.files[0].name);
+      }
+    });
+    input.addEventListener('change', () => {
+      if (input.files.length) updateZoneLabel(zone, input.files[0].name);
+    });
+  });
+
+  function updateZoneLabel(zone, filename) {
+    zone.classList.add('has-file');
+    const label = zone.querySelector('.drop-label');
+    if (label) {
+      label.innerHTML = `<i class="bi bi-check-circle-fill text-success me-1"></i>${filename}`;
+    }
+  }
+</script>
+{% block scripts %}{% endblock %}
+</body>
+</html>

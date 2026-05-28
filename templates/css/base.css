@@ -1,0 +1,91 @@
+:root {
+  --brand: #1e3a5f;
+  --brand-light: #2e5491;
+  --accent: #e8a020;
+}
+
+body {
+  font-size: .92rem;
+}
+
+/* Navbar */
+.navbar-brand span.badge {
+  font-size: .65rem;
+  vertical-align: middle;
+}
+
+/* Theme toggle */
+#theme-toggle {
+  cursor: pointer;
+}
+
+/* Cards de resumo */
+.summary-card {
+  border-left: 4px solid var(--brand);
+}
+.summary-card.positive { border-color: #198754; }
+.summary-card.negative { border-color: #dc3545; }
+.summary-card.income   { border-color: #0d6efd; }
+
+/* Tabelas */
+.table-sm td,
+.table-sm th {
+  vertical-align: middle;
+}
+
+.gain-positive {
+  color: #198754;
+  font-weight: 600;
+}
+.gain-negative {
+  color: #dc3545;
+  font-weight: 600;
+}
+
+/* Abas */
+.nav-tabs .nav-link.active {
+  font-weight: 600;
+}
+
+/* Zonas de drag-and-drop */
+.drop-zone {
+  border: 2px dashed #adb5bd;
+  border-radius: .5rem;
+  padding: 1.5rem;
+  text-align: center;
+  cursor: pointer;
+  transition: border-color .2s, background-color .2s;
+  min-height: 110px;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+}
+
+.drop-zone:hover,
+.drop-zone.dragover {
+  border-color: var(--brand-light);
+  background-color: rgba(30, 58, 95, .07);
+}
+
+.drop-zone.has-file {
+  border-color: #198754;
+  background-color: rgba(25, 135, 84, .07);
+}
+
+.drop-zone .icon {
+  font-size: 2rem;
+  margin-bottom: .4rem;
+  color: #6c757d;
+}
+
+.drop-zone.has-file .icon {
+  color: #198754;
+}
+
+/* Impressão */
+@media print {
+  .no-print { display: none !important; }
+  .tab-pane { display: block !important; opacity: 1 !important; }
+  .card      { break-inside: avoid; }
+}
