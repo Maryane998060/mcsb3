@@ -271,7 +271,9 @@ def calculate_positions(
             events.append({
                 'ts': _parse_date(m['date']), 'date': m['date'],
                 'kind': 'bonus', 'ticker': ticker,
-                'quantity': m['quantity'], 'cost_per_share': m['unit_price'] or 0,
+                'quantity': m['quantity'],
+                'cost_per_share': m['unit_price'] or 0,
+                'operation_value': m['operation_value'] or 0,
             })
         elif classified['category'] == 'split':
             delta = m['quantity'] if is_credit else -m['quantity']
@@ -369,11 +371,13 @@ def calculate_positions(
                     ),
                     'ticker': ticker, 'date': ev['date'],
                 })
-            # Prorratea o valor de venda se vendemos menos do que o registrado
+            # Prorratea valor de venda se vendemos menos do que o registrado
             sale_value = _round2(ev['value'] * (sold_qty / ev['quantity'])) if ev['quantity'] > 0 else ev['value']
-            cmpa       = pos['average_cost']
-            cost_basis = _round2(cmpa * sold_qty)
-            gain       = _round2(sale_value - cost_basis)
+            cmpa        = pos['average_cost']
+            old_qty     = pos['quantity']
+            old_total   = pos['total_cost']
+            cost_basis  = _round2(cmpa * sold_qty)
+            gain        = _round2(sale_value - cost_basis)
             sales.append({
                 'date': ev['date'], 'ticker': ticker,
                 'quantity': sold_qty, 'sale_price': sale_value,
@@ -386,19 +390,42 @@ def calculate_positions(
                 'value': sale_value, 'institution': pos['institution'],
                 'cmpa_at_sale': _round2(cmpa), 'gain': gain,
             })
+            # Redução proporcional do custo total — CMPA não muda após venda
             pos['quantity']   -= sold_qty
-            pos['total_cost']  = _round2(pos['average_cost'] * pos['quantity'])
+            pos['total_cost']  = _round2(old_total * pos['quantity'] / old_qty) if old_qty > 0 else 0.0
 
         elif ev['kind'] == 'bonus':
             pos = get_or_create(ticker, ticker, ev['date'])
-            bonus_cost = _round2(ev['quantity'] * ev.get('cost_per_share', 0))
-            pos['quantity']     += ev['quantity']
+            qty = ev['quantity']
+            # Prioridade: Valor da Operação > Preço Unitário × Qtd
+            op_val     = ev.get('operation_value') or 0
+            unit_price = ev.get('cost_per_share')  or 0
+            if op_val > 0:
+                bonus_cost  = _round2(op_val)
+                unit_for_hist = _round2(op_val / qty) if qty > 0 else unit_price
+            elif unit_price > 0:
+                bonus_cost  = _round2(qty * unit_price)
+                unit_for_hist = unit_price
+            else:
+                # B3 não informa o custo patrimonial neste evento
+                bonus_cost  = 0.0
+                unit_for_hist = 0.0
+                validation_issues.append({
+                    'level':   'warning',
+                    'message': (
+                        f"Bonificação de {qty} {ticker} em {ev['date']}: custo não informado pela B3. "
+                        f"O custo patrimonial precisa ser informado manualmente para que o CMPA fique correto. "
+                        f"Consulte o comunicado da empresa ou o portal da CVM."
+                    ),
+                    'ticker': ticker, 'date': ev['date'],
+                })
+            pos['quantity']    += qty
             pos['total_cost']   = _round2(pos['total_cost'] + bonus_cost)
-            pos['average_cost']  = pos['total_cost'] / pos['quantity'] if pos['quantity'] > 0 else 0.0
+            pos['average_cost'] = pos['total_cost'] / pos['quantity'] if pos['quantity'] > 0 else 0.0
             pos['bonus_events'].append({
                 'date': ev['date'],
-                'quantity': ev['quantity'],
-                'unit_price': ev.get('cost_per_share', 0),
+                'quantity': qty,
+                'unit_price': unit_for_hist,
                 'total_cost': bonus_cost,
             })
             corporate_events.append({
