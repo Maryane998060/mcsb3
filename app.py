@@ -341,16 +341,14 @@ def _fmt_brl(n: float) -> str:
 def _build_discriminacao(a: dict) -> str:
     """Monta discriminação no padrão Bens e Direitos IRPF."""
     unidade_map = {'FII': 'COTAS', 'ETF': 'COTAS', 'BDR': 'BDRs'}
-    unidade     = unidade_map.get(a['type'], 'AÇÕES')
-    ticker      = a['ticker']
-    qty_str     = _fmt_qty(a['quantity'])
-    cmpa_br     = _fmt_brl(a['average_cost'])
-    total_br    = _fmt_brl(a['total_cost'])
+    unidade  = unidade_map.get(a['type'], 'AÇÕES')
+    ticker   = a['ticker']
+    qty_str  = _fmt_qty(a['quantity'])
+    cmpa_br  = _fmt_brl(a['average_cost'])
 
     buy_events   = a.get('buy_events', [])
     bonus_events = a.get('bonus_events', [])
 
-    # Monta parte da custódia
     custodia = ''
     if a.get('institution'):
         custodia = f"CUSTÓDIA NA {a['institution'].upper()}"
@@ -358,61 +356,41 @@ def _build_discriminacao(a: dict) -> str:
             custodia += f", CNPJ {a['broker_cnpj']}"
 
     if not bonus_events:
-        # ── Caso simples: só compras, sem bonificação ──
-        if not buy_events:
-            datas_str = a.get('first_purchase_date', '')
-        elif len(buy_events) == 1:
+        # ── Sem bonificação: formato simples ──
+        if len(buy_events) == 1:
             datas_str = buy_events[0]['date']
-        else:
+        elif buy_events:
             datas = list(dict.fromkeys(b['date'] for b in buy_events))
             datas_str = ', '.join(datas[:-1]) + ' E ' + datas[-1]
+        else:
+            datas_str = a.get('first_purchase_date', '')
 
-        texto = (
-            f"{qty_str} {unidade} {ticker}, "
-            f"ADQUIRIDAS EM {datas_str}, "
-            f"COM O CUSTO MÉDIO DE R$ {cmpa_br}"
-        )
+        texto = f"{qty_str} {unidade} {ticker}, ADQUIRIDAS EM {datas_str}, COM CUSTO MÉDIO DE R$ {cmpa_br}"
         if custodia:
-            texto += f", {custodia}"
+            texto += f". {custodia}"
         return texto + '.'
 
-    # ── Caso complexo: compras + bonificações ──
+    # ── Com bonificação ──
     total_buy_qty  = sum(b['quantity']   for b in buy_events)
     total_buy_cost = sum(b['total_cost'] for b in buy_events)
 
     if len(buy_events) == 1:
         b = buy_events[0]
-        compra_part = (
-            f"SENDO {_fmt_qty(b['quantity'])} ADQUIRIDAS EM {b['date']} "
-            f"PELO CUSTO TOTAL DE R$ {_fmt_brl(b['total_cost'])}"
-        )
+        compra_part = f"SENDO {_fmt_qty(b['quantity'])} ADQUIRIDAS EM {b['date']} PELO CUSTO TOTAL DE R$ {_fmt_brl(b['total_cost'])}"
     else:
         datas = list(dict.fromkeys(b['date'] for b in buy_events))
         datas_str = ', '.join(datas[:-1]) + ' E ' + datas[-1]
-        compra_part = (
-            f"SENDO {_fmt_qty(total_buy_qty)} ADQUIRIDAS EM {datas_str} "
-            f"PELO CUSTO TOTAL DE R$ {_fmt_brl(total_buy_cost)}"
-        )
+        compra_part = f"SENDO {_fmt_qty(total_buy_qty)} ADQUIRIDAS EM {datas_str} PELO CUSTO TOTAL DE R$ {_fmt_brl(total_buy_cost)}"
 
     bonus_parts = []
     for bns in bonus_events:
         ano = bns['date'].split('/')[-1] if '/' in bns['date'] else bns['date']
-        bonus_parts.append(
-            f"E {_fmt_qty(bns['quantity'])} RECEBIDAS EM BONIFICAÇÃO EM {ano} "
-            f"AO CUSTO UNITÁRIO DE R$ {_fmt_brl(bns['unit_price'])} "
-            f"(TOTAL R$ {_fmt_brl(bns['total_cost'])})"
-        )
+        bonus_parts.append(f"E {_fmt_qty(bns['quantity'])} RECEBIDAS EM BONIFICAÇÃO EM {ano}")
 
-    texto = (
-        f"{qty_str} {unidade} {ticker}, "
-        f"{compra_part} "
-        f"{' '.join(bonus_parts)}. "
-        f"NOVO CUSTO MÉDIO UNITÁRIO: R$ {cmpa_br}. "
-        f"CUSTO TOTAL DE AQUISIÇÃO: R$ {total_br}."
-    )
+    texto = f"{qty_str} {unidade} {ticker}, {compra_part} {' '.join(bonus_parts)}"
     if custodia:
-        texto += f" {custodia}."
-    return texto
+        texto += f"\n{custodia}"
+    return texto + '.'
 
 
 def _parse_date_to_datetime(date_str: str):
