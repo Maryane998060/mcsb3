@@ -339,58 +339,70 @@ def _fmt_brl(n: float) -> str:
 
 
 def _build_discriminacao(a: dict) -> str:
-    """Monta discriminação no padrão Bens e Direitos IRPF."""
+    """
+    Monta a discriminação automatizada no padrão Bens e Direitos IRPF 
+    suportando Bonificações fiscais, Grupamentos e Restituição de Capital.
+    """
     unidade_map = {'FII': 'COTAS', 'ETF': 'COTAS', 'BDR': 'BDRs'}
     unidade  = unidade_map.get(a['type'], 'AÇÕES')
     ticker   = a['ticker']
     qty_str  = _fmt_qty(a['quantity'])
     cmpa_br  = _fmt_brl(a['average_cost'])
 
+    # Mapeamento estrito de CNPJs de Corretoras comuns para evitar alucinação
+    cnpjs_corretoras = {
+        'SANTANDER CCVM S/A': '58.119.371/0001-77',
+        'SANTANDER CCVM': '58.119.371/0001-77',
+        'GENIAL INVESTIMENTOS CORRETORA DE VALORES MOBILIARIOS S.A.': '27.652.684/0001-62',
+        'INTER DTVM LTDA': '18.945.670/0001-46'
+    }
+    
+    inst_name = a.get('institution', '').upper().strip()
+    cnpj_corretora = cnpjs_corretoras.get(inst_name, a.get('broker_cnpj', '00.000.000/0000-00'))
+
+    custodia = f"CUSTODIADAS NA {inst_name}"
+    if cnpj_corretora:
+        custodia += f", CNPJ {cnpj_corretora}"
+
+    # Captura os históricos de eventos vindos do motor de cálculo
     buy_events   = a.get('buy_events', [])
     bonus_events = a.get('bonus_events', [])
+    corp_events  = a.get('corporate_events_history', []) # Nova lista mapeada do ledger
 
-    custodia = ''
-    if a.get('institution'):
-        custodia = f"CUSTÓDIA NA {a['institution'].upper()}"
-        if a.get('broker_cnpj'):
-            custodia += f", CNPJ {a['broker_cnpj']}"
-
-    if not bonus_events:
-        # ── Sem bonificação: formato simples ──
-        if len(buy_events) == 1:
-            datas_str = buy_events[0]['date']
-        elif buy_events:
-            datas = list(dict.fromkeys(b['date'] for b in buy_events))
-            datas_str = ', '.join(datas[:-1]) + ' E ' + datas[-1]
-        else:
-            datas_str = a.get('first_purchase_date', '')
-
-        texto = f"{qty_str} {unidade} {ticker}, ADQUIRIDAS EM {datas_str}, COM CUSTO MÉDIO DE R$ {cmpa_br}"
-        if custodia:
-            texto += f". {custodia}"
-        return texto + '.'
-
-    # ── Com bonificação ──
-    total_buy_qty  = sum(b['quantity']   for b in buy_events)
-    total_buy_cost = sum(b['total_cost'] for b in buy_events)
-
+    # 1. Montagem da base de Aquisição
     if len(buy_events) == 1:
-        b = buy_events[0]
-        compra_part = f"SENDO {_fmt_qty(b['quantity'])} ADQUIRIDAS EM {b['date']} PELO CUSTO TOTAL DE R$ {_fmt_brl(b['total_cost'])}"
-    else:
+        datas_str = f"EM {buy_events[0]['date']}"
+    elif buy_events:
         datas = list(dict.fromkeys(b['date'] for b in buy_events))
-        datas_str = ', '.join(datas[:-1]) + ' E ' + datas[-1]
-        compra_part = f"SENDO {_fmt_qty(total_buy_qty)} ADQUIRIDAS EM {datas_str} PELO CUSTO TOTAL DE R$ {_fmt_brl(total_buy_cost)}"
+        if len(datas) > 1:
+            datas_str = f"ENTRE {datas[0]} E {datas[-1]}"
+        else:
+            datas_str = f"EM {datas[0]}"
+    else:
+        datas_str = f"DESDE {a.get('first_purchase_date', 'PERÍODO ANTERIOR')}"
 
-    bonus_parts = []
+    texto = f"{qty_str} {unidade} {ticker}, ADQUIRIDAS {datas_str}, COM O CUSTO MÉDIO DE R$ {cmpa_br}, {custodia}."
+
+    # 2. Injeção dinâmica de eventos complexos ocorridos no ano (Evita Malha Fina)
+    ajustes = []
+    
+    # Se houveram bonificações (Caso ITUB4 / AXIA7)
     for bns in bonus_events:
-        ano = bns['date'].split('/')[-1] if '/' in bns['date'] else bns['date']
-        bonus_parts.append(f"E {_fmt_qty(bns['quantity'])} RECEBIDAS EM BONIFICAÇÃO EM {ano}")
+        v_fiscal = bns.get('unit_fiscal_value', 0)
+        v_fiscal_str = f" PELO VALOR UNITÁRIO FISCAL DE R$ {_fmt_brl(v_fiscal)}" if v_fiscal > 0 else ""
+        ajustes.append(f"RECEBIMENTO DE BONIFICAÇÃO DE {bns.get('quantity_change', bns.get('quantity'))} ATIVOS EM {bns['date']}{v_fiscal_str}")
+        
+    # Se houveram outros eventos na timeline (Caso VIVT3)
+    for evt in corp_events:
+        if evt['type'] == 'GRUPAMENTO':
+            ajustes.append(f"POSIÇÃO AJUSTADA POR EVENTO CORPORATIVO DE GRUPAMENTO EM {evt['date']}")
+        elif evt['type'] == 'RESTITUICAO_CAPITAL':
+            ajustes.append(f"REDUÇÃO DE CUSTO HISTÓRICO DEVIDO A RESTITUIÇÃO DE CAPITAL EM DINHEIRO NO VALOR DE R$ {_fmt_brl(evt['value'])} EM {evt['date']}")
 
-    texto = f"{qty_str} {unidade} {ticker}, {compra_part} {' '.join(bonus_parts)}"
-    if custodia:
-        texto += f"\n{custodia}"
-    return texto + '.'
+    if ajustes:
+        texto += " POSIÇÃO AJUSTADA NO ANO BASE DEVIDO A: " + "; ".join(ajustes) + "."
+
+    return texto\
 
 
 def _parse_date_to_datetime(date_str: str):
