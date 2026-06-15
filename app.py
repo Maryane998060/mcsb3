@@ -44,6 +44,17 @@ def load_user(user_id):
 # Inicializa admin padrão na primeira execução
 auth_module.inicializar_admin_se_necessario()
 
+# Cria o usuário SUP padrão se não existir (para deploy em nuvem)
+def _garantir_sup_inicial():
+    try:
+        if not auth_module.buscar_por_username('sup'):
+            auth_module.criar_usuario('sup', 'Administrador SUP', 'Ctbc.123', role='sup')
+            print("[AUTH] Usuario SUP criado automaticamente.")
+    except Exception as e:
+        print(f"[AUTH] Aviso ao criar SUP: {e}")
+
+_garantir_sup_inicial()
+
 # Armazenamento em memória dos relatórios processados (chaveado por UUID)
 _report_store: dict = {}
 
