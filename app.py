@@ -218,8 +218,6 @@ def extract_client_info():
 def upload():
     current_year = date.today().year
     return render_template('upload.html', current_year=current_year)
-    current_year = date.today().year
-    return render_template('upload.html', current_year=current_year)
 
 
 @app.route('/process', methods=['POST'])
@@ -272,13 +270,16 @@ def process():
                 cpf = pdf_summary['cpf_titular']
 
     except Exception as e:
-        return render_template('upload.html', error=f'Erro ao processar arquivos: {e}')
+        import traceback
+        return render_template('upload.html', error=f'Erro ao processar arquivos: {e}. Detalhes: {traceback.format_exc()[-500:]}')
 
-    # Calcula posições e CMPA
-    # Carrega ajustes automaticamente do arquivo ajustes_irpf.json
-    ajustes_irpf = _load_ajustes()
-
-    result = calculate_positions(transactions, movements, year=year, ajustes_irpf=ajustes_irpf)
+    try:
+        # Calcula posições e CMPA
+        ajustes_irpf = _load_ajustes()
+        result = calculate_positions(transactions, movements, year=year, ajustes_irpf=ajustes_irpf)
+    except Exception as e:
+        import traceback
+        return render_template('upload.html', error=f'Erro no cálculo do CMPA: {e}. Detalhes: {traceback.format_exc()[-800:]}')
     assets           = result['assets']
     sales            = result['sales']
     corporate_events = result['corporate_events']
