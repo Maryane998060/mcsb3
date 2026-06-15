@@ -70,16 +70,20 @@ def _classify_movement(m: Dict) -> Dict:
     raw = _norm(m['type'])
     if 'bonifica' in raw:
         return {'category': 'bonus', 'description': 'Bonificação'}
-    if 'desdobr' in raw:
+    if 'desdobr' in raw or 'desdobro' in raw:
         return {'category': 'split', 'description': 'Desdobramento'}
     if 'agrupamento' in raw or 'grupamento' in raw:
         return {'category': 'merge', 'description': 'Agrupamento'}
     if re.search(r'leil(i|a)o|leilao', raw):
         return {'category': 'auction', 'description': 'Leilão de Frações'}
+    if 'fracao' in raw or 'fracao_em_ativos' in raw or re.search(r'fra(c|ç)(ao|ã)o', raw):
+        return {'category': 'fraction', 'description': 'Fração em Ativos'}
     if 'amortiz' in raw:
         return {'category': 'amortizacao', 'description': 'Amortização'}
-    if re.search(r'cisa(o|ão)|spin.?off', raw):
+    if re.search(r'cisa(o|ao)|spin.?off', raw):
         return {'category': 'cisao', 'description': 'Cisão'}
+    if re.search(r'restituic(a|ã)o.*capital|restituicao', raw):
+        return {'category': 'restituicao_capital', 'description': 'Restituição de Capital'}
     if re.search(r'juros.*capital|jcp', raw):
         return {'category': 'jcp', 'description': 'JCP'}
     if 'dividend' in raw or 'dividendo' in raw:
@@ -104,28 +108,28 @@ def _classify_movement(m: Dict) -> Dict:
 def calculate_positions(
     transactions: List[Dict],
     movements: List[Dict],
+    year: int = 0,
+    ajustes_irpf: Dict[str, Dict] = None,
 ) -> Dict[str, Any]:
+    """
+    ajustes_irpf: dict opcional, keyed por ticker, com:
+        {
+          'custo_declarado': float,    # custo total que entra como base para cálculo de 2025
+          'custo_irpf_anterior': float, # custo exibido na coluna 31/12/ano-anterior (pode ser 0 = omitido)
+          'qty_declarada':  float,     # quantidade declarada no IRPF anterior (opcional)
+          'bonus_fiscal': {            # valor fiscal de bonificações sem custo na B3
+              'DD/MM/YYYY': float      # data → valor unitário fiscal
+          }
+        }
+    """
+    if ajustes_irpf is None:
+        ajustes_irpf = {}
     events: List[Dict] = []
     operations: List[Dict] = []
     audit_log: List[Dict] = []
     validation_issues: List[Dict] = []
 
     has_transaction_data = len(transactions) > 0
-
-    # Mapa de deduplicação: "tipo|ticker|qty" → contador
-    nego_count: Dict[str, int] = {}
-
-    def add_nego_key(kind: str, ticker: str, qty: float):
-        key = f'{kind}|{ticker}|{round(qty)}'
-        nego_count[key] = nego_count.get(key, 0) + 1
-
-    def consume_nego_key(kind: str, ticker: str, qty: float) -> bool:
-        key = f'{kind}|{ticker}|{round(qty)}'
-        n = nego_count.get(key, 0)
-        if n > 0:
-            nego_count[key] = n - 1
-            return True
-        return False
 
     # ── Processa Negociação ────────────────────────────────────────────────────
     for t in transactions:
@@ -135,7 +139,6 @@ def calculate_positions(
         if not is_buy and not is_sell:
             continue
         kind = 'buy' if is_buy else 'sell'
-        add_nego_key(kind, t['normalized_ticker'], t['quantity'])
         events.append({
             'ts':               _parse_date(t['date']),
             'date':             t['date'],
@@ -151,40 +154,55 @@ def calculate_positions(
         })
 
     # ── Processa Movimentação ──────────────────────────────────────────────────
+    # REGRAS FUNDAMENTAIS (conforme B3):
+    # 1. Transferência entre corretoras → NUNCA altera custo/quantidade. Apenas registro.
+    # 2. Compra/Venda na movimentação → só usada quando NÃO há planilha de Negociação.
+    #    Quando há Negociação, a movimentação de compra/venda é duplicata — ignorar.
+    # 3. Eventos corporativos (bonificação, desdobro, grupamento, etc.) → sempre processam.
+    # 4. Restituição de Capital → subtrai do custo total.
+    # 5. Proventos (dividendo, JCP, rendimento) → apenas informativo, não altera CMPA.
+
     for m in movements:
         tl = _norm(m['type'])
         ticker = m.get('normalized_ticker') or _extract_ticker(m['product'])
         if not ticker:
             continue
 
-        is_buy_mov  = tl == 'compra' or tl.startswith('compra')
-        is_sell_mov = tl == 'venda'  or tl.startswith('venda')
+        classified = _classify_movement(m)
+        cat = classified['category']
+
+        # ── Transferência e Custódia: SEMPRE ignorar para cálculo de posição ──
+        # São movimentos entre corretoras ou custódia — não representam compra/venda nova.
+        if cat in ('transferencia', 'custodia', 'liquidacao'):
+            # Não adiciona ao audit_log — transferências são normais, não são erros
+            operations.append({
+                'date': m['date'], 'ticker': ticker,
+                'full_name': _extract_full_name(m['product']),
+                'type': classified['description'],
+                'quantity': m['quantity'], 'unit_price': m['unit_price'],
+                'value': m['operation_value'], 'institution': m['institution'],
+                'note': 'Transferência entre corretoras — não altera CMPA.',
+            })
+            continue
+
+        # ── Compra/Venda na movimentação ──
+        is_buy_mov  = tl == 'compra' or tl.startswith('compra') or cat == 'buy'
+        is_sell_mov = tl == 'venda'  or tl.startswith('venda')  or cat == 'sell'
 
         if is_buy_mov or is_sell_mov:
             kind = 'buy' if is_buy_mov else 'sell'
             if has_transaction_data:
-                if not consume_nego_key(kind, ticker, m['quantity']):
-                    audit_log.append({
-                        'date':   m['date'], 'ticker': ticker,
-                        'event':  f"{'Compra' if kind == 'buy' else 'Venda'} sem negociação correspondente",
-                        'action': 'IGNORADO',
-                        'reason': 'Movimentação contém operação que não está em Negociação.',
-                        'details': f"Tipo: {m['type']} / Qtd {m['quantity']}",
-                    })
-                    validation_issues.append({
-                        'level':   'warning',
-                        'message': f"Movimentação {kind} para {ticker} em {m['date']} sem correspondência em Negociação.",
-                        'ticker':  ticker, 'date': m['date'],
-                    })
+                # Com planilha de Negociação: movimentação de compra/venda é sempre duplicata
                 operations.append({
                     'date': m['date'], 'ticker': ticker,
                     'full_name': _extract_full_name(m['product']),
                     'type': 'Movimentação Duplicada',
                     'quantity': m['quantity'], 'unit_price': m['unit_price'],
                     'value': m['operation_value'], 'institution': m['institution'],
-                    'note': 'Compra/venda da Movimentação deduplicada com Negociação.',
+                    'note': 'Duplicata da Negociação — ignorado no cálculo.',
                 })
             else:
+                # Sem planilha de Negociação: usa movimentação como fonte primária
                 events.append({
                     'ts': _parse_date(m['date']), 'date': m['date'],
                     'kind': kind, 'ticker': ticker,
@@ -202,70 +220,14 @@ def calculate_positions(
                 })
             continue
 
-        classified = _classify_movement(m)
-        is_credit = 'credito' in _norm(m['credit_debit']) or 'crédito' in m['credit_debit'].lower()
-        is_transfer_liq = classified['category'] in ('transferencia', 'liquidacao')
-        is_auction = classified['category'] == 'auction'
-        is_valid_credit = is_credit and m['quantity'] > 0 and m['unit_price'] > 0 and (is_transfer_liq or is_auction)
-
-        if is_valid_credit:
-            if has_transaction_data and is_transfer_liq:
-                operations.append({
-                    'date': m['date'], 'ticker': ticker,
-                    'full_name': _extract_full_name(m['product']),
-                    'type': 'Movimentação Duplicada',
-                    'quantity': m['quantity'], 'unit_price': m['unit_price'],
-                    'value': m['operation_value'], 'institution': m['institution'],
-                    'note': 'Transferência/Liquidação ignorada — já em Negociação.',
-                })
-                continue
-            if has_transaction_data and consume_nego_key('buy', ticker, m['quantity']):
-                operations.append({
-                    'date': m['date'], 'ticker': ticker,
-                    'full_name': _extract_full_name(m['product']),
-                    'type': 'Movimentação Duplicada',
-                    'quantity': m['quantity'], 'unit_price': m['unit_price'],
-                    'value': m['operation_value'], 'institution': m['institution'],
-                })
-                continue
-            events.append({
-                'ts': _parse_date(m['date']), 'date': m['date'],
-                'kind': 'buy', 'ticker': ticker,
-                'full_name': _extract_full_name(m['product']),
-                'quantity': m['quantity'], 'value': m['operation_value'],
-                'institution': m['institution'],
-                'asset_cnpj': m.get('asset_cnpj'), 'broker_cnpj': m.get('broker_cnpj'),
-            })
-            operations.append({
-                'date': m['date'], 'ticker': ticker,
-                'full_name': _extract_full_name(m['product']),
-                'type': 'Compra', 'quantity': m['quantity'],
-                'unit_price': m['unit_price'], 'value': m['operation_value'],
-                'institution': m['institution'],
-            })
+        # ── Proventos: dividendos, JCP, rendimentos → só informativo ──
+        if cat in ('dividendo', 'jcp', 'fiiIncome'):
+            # Registrado apenas para exibição — não altera CMPA
             continue
 
-        if classified.get('suspicious'):
-            audit_log.append({
-                'date': m['date'], 'ticker': ticker,
-                'event': classified['description'], 'action': 'AVALIADO',
-                'reason': 'Movimentação suspeita — não altera CMPA.',
-                'details': f"Tipo: {m['type']} / Qtd {m['quantity']}",
-            })
-            validation_issues.append({
-                'level': 'warning',
-                'message': f"Evento suspeito de {classified['description']} em {m['date']} para {ticker}.",
-                'ticker': ticker, 'date': m['date'],
-            })
-            type_map = {'Transferência': 'Transferência', 'Custódia': 'Custódia', 'Liquidação': 'Liquidação'}
-            operations.append({
-                'date': m['date'], 'ticker': ticker,
-                'full_name': _extract_full_name(m['product']),
-                'type': type_map.get(classified['description'], 'Evento Suspeito'),
-                'quantity': m['quantity'], 'unit_price': m['unit_price'],
-                'value': m['operation_value'], 'institution': m['institution'],
-            })
-            continue
+        # Calcula crédito/débito para eventos corporativos que precisam saber a direção
+        is_credit = 'credito' in _norm(m['credit_debit']) or 'crédito' in m.get('credit_debit', '').lower()
+        is_debit  = 'debito'  in _norm(m['credit_debit']) or 'débito'  in m.get('credit_debit', '').lower()
 
         if classified['category'] == 'bonus':
             events.append({
@@ -280,10 +242,32 @@ def calculate_positions(
             events.append({'ts': _parse_date(m['date']), 'date': m['date'], 'kind': 'split', 'ticker': ticker, 'quantity_delta': delta})
         elif classified['category'] == 'merge':
             delta = m['quantity'] if is_credit else -m['quantity']
-            events.append({'ts': _parse_date(m['date']), 'date': m['date'], 'kind': 'merge', 'ticker': ticker, 'quantity_delta': delta})
+            # Grupamento/Agrupamento: crédito de fração pequena = fração gerada indo a leilão
+            # Não altera a posição — a fração é processada pelo Leilão de Fração (auction)
+            # Apenas grupamentos inteiros (sem fração, débito) ajustam a quantidade
+            if abs(delta) < 1.0:
+                # Fração de grupamento — apenas registra, não altera posição
+                operations.append({
+                    'date': m['date'], 'ticker': ticker,
+                    'full_name': _extract_full_name(m['product']),
+                    'type': 'Grupamento (fração)', 'quantity': delta,
+                    'unit_price': 0, 'value': 0, 'institution': m['institution'],
+                    'note': 'Fração de grupamento enviada a leilão — não altera CMPA.',
+                })
+            else:
+                events.append({'ts': _parse_date(m['date']), 'date': m['date'], 'kind': 'merge', 'ticker': ticker, 'quantity_delta': delta})
         elif classified['category'] == 'auction':
-            delta = m['quantity'] if is_credit else -m['quantity']
-            events.append({'ts': _parse_date(m['date']), 'date': m['date'], 'kind': 'auction', 'ticker': ticker, 'quantity_delta': delta, 'value': m['operation_value']})
+            # Leilão de Fração: o Crédito é a RECEITA da venda da fração (financeiro)
+            # A fração já foi enviada pelo evento de Grupamento/Fração
+            # Registramos com delta negativo para indicar saída da fração
+            frac_qty = m['quantity']
+            frac_val = m['operation_value']
+            events.append({
+                'ts': _parse_date(m['date']), 'date': m['date'],
+                'kind': 'auction', 'ticker': ticker,
+                'quantity_delta': -frac_qty,   # fração sai da posição
+                'value': frac_val,             # receita recebida
+            })
         elif classified['category'] == 'amortizacao':
             events.append({
                 'ts': _parse_date(m['date']), 'date': m['date'],
@@ -292,16 +276,68 @@ def calculate_positions(
             })
         elif classified['category'] == 'cisao':
             delta = m['quantity'] if is_credit else -m['quantity']
+            cisao_val = m['operation_value'] or 0
+            # Cisão com valor zero e crédito = migração de custódia ou reorganização societária
+            # sem efeito financeiro — tratar como Transferência (ignorar posição)
+            if cisao_val == 0 and is_credit:
+                audit_log.append({
+                    'date': m['date'], 'ticker': ticker,
+                    'event': 'Cisão sem valor', 'action': 'IGNORADO',
+                    'reason': 'Cisão com valor zero tratada como migração de custódia.',
+                    'details': f"Tipo: {m['type']} / Qtd {m['quantity']}",
+                })
+                operations.append({
+                    'date': m['date'], 'ticker': ticker,
+                    'full_name': _extract_full_name(m['product']),
+                    'type': 'Cisão (ignorada)',
+                    'quantity': m['quantity'], 'unit_price': 0,
+                    'value': 0, 'institution': m['institution'],
+                    'note': 'Cisão sem valor — migração de custódia, não altera CMPA.',
+                })
+            else:
+                events.append({
+                    'ts': _parse_date(m['date']), 'date': m['date'],
+                    'kind': 'cisao', 'ticker': ticker,
+                    'quantity_delta': delta, 'value': cisao_val,
+                })
+
+        elif classified['category'] == 'restituicao_capital':
+            # Restituição de Capital: subtrai o valor recebido do custo total acumulado
+            # Conforme regra: o valor financeiro deve ser subtraído do Custo Total Acumulado
+            if m['operation_value'] > 0:
+                events.append({
+                    'ts': _parse_date(m['date']), 'date': m['date'],
+                    'kind': 'restituicao_capital', 'ticker': ticker,
+                    'value': m['operation_value'],
+                    'unit_price': m['unit_price'],
+                    'quantity': m['quantity'],
+                })
+
+        elif classified['category'] == 'fraction':
+            # Fração em Ativos: crédito de frações de ações após desdobramento/grupamento
+            # Se tem valor, soma ao custo (compra de fração). Se não tem, só ajusta quantidade.
+            delta = m['quantity'] if is_credit else -m['quantity']
+            frac_value = m['operation_value'] if is_credit else 0.0
             events.append({
                 'ts': _parse_date(m['date']), 'date': m['date'],
-                'kind': 'cisao', 'ticker': ticker,
-                'quantity_delta': delta, 'value': m['operation_value'],
+                'kind': 'fraction', 'ticker': ticker,
+                'quantity_delta': delta, 'value': frac_value,
             })
 
     # ── Ordena e processa timeline ─────────────────────────────────────────────
     # No mesmo dia: compras/vendas (priority 0) antes de eventos corporativos (priority 1)
-    _CORP_KINDS = {'bonus', 'split', 'merge', 'auction', 'amortizacao', 'cisao'}
+    _CORP_KINDS = {'bonus', 'split', 'merge', 'auction', 'amortizacao', 'cisao',
+                   'restituicao_capital', 'fraction'}
     events.sort(key=lambda e: (e['ts'], 1 if e['kind'] in _CORP_KINDS else 0))
+
+    # Timestamp de virada do ano — para injetar custo declarado no IRPF anterior
+    _ts_year_start = 0
+    _irpf_injected = set()  # tickers já injetados
+    if year:
+        try:
+            _ts_year_start = int(datetime(year, 1, 1, 0, 0).timestamp())
+        except Exception:
+            _ts_year_start = 0
 
     positions: Dict[str, Dict] = {}
     sales: List[Dict] = []
@@ -318,6 +354,7 @@ def calculate_positions(
                 'first_purchase_quantity': 0.0,
                 'buy_events': [],
                 'bonus_events': [],
+                'corporate_events_history': [],
             }
         pos = positions[ticker]
         if asset_cnpj and not pos['asset_cnpj']:
@@ -328,6 +365,27 @@ def calculate_positions(
 
     for ev in events:
         ticker = ev['ticker']
+
+        # ── Injeta custo declarado no IRPF anterior ao entrar no ano selecionado ──
+        # Só faz isso uma vez por ticker, na primeira vez que um evento de 2025 aparece
+        if (_ts_year_start > 0
+                and ev['ts'] >= _ts_year_start
+                and ticker not in _irpf_injected
+                and ticker in ajustes_irpf
+                and 'custo_declarado' in ajustes_irpf[ticker]):
+            _irpf_injected.add(ticker)
+            ajuste = ajustes_irpf[ticker]
+            custo_decl = _round2(float(ajuste['custo_declarado']))
+            qty_decl   = ajuste.get('qty_declarada')
+            if ticker in positions:
+                pos_inj = positions[ticker]
+                pos_inj['total_cost']   = custo_decl
+                if qty_decl is not None:
+                    pos_inj['quantity'] = _round2(float(qty_decl))
+                pos_inj['average_cost'] = (
+                    pos_inj['total_cost'] / pos_inj['quantity']
+                    if pos_inj['quantity'] > 0 else 0.0
+                )
 
         if ev['kind'] == 'buy':
             pos = get_or_create(ticker, ev.get('full_name', ticker), ev['date'],
@@ -390,32 +448,50 @@ def calculate_positions(
                 'value': sale_value, 'institution': pos['institution'],
                 'cmpa_at_sale': _round2(cmpa), 'gain': gain,
             })
-            # Redução proporcional do custo total — CMPA não muda após venda
+            # Redução proporcional do custo total — CMPA não muda após venda parcial.
+            # Se a posição zera, custo também zera completamente.
             pos['quantity']   -= sold_qty
-            pos['total_cost']  = _round2(old_total * pos['quantity'] / old_qty) if old_qty > 0 else 0.0
+            if pos['quantity'] <= 0.0001:
+                pos['quantity']   = 0.0
+                pos['total_cost'] = 0.0
+                pos['average_cost'] = 0.0
+            else:
+                pos['total_cost'] = _round2(old_total * pos['quantity'] / old_qty) if old_qty > 0 else 0.0
 
         elif ev['kind'] == 'bonus':
             pos = get_or_create(ticker, ticker, ev['date'])
             qty = ev['quantity']
-            # Prioridade: Valor da Operação > Preço Unitário × Qtd
+            # Prioridade: 1) valor fiscal informado via ajuste_irpf, 2) valor da operação, 3) preço unitário
+            ajuste_ticker = ajustes_irpf.get(ticker, {})
+            bonus_fiscal_map = ajuste_ticker.get('bonus_fiscal', {})
+            valor_fiscal_unit = bonus_fiscal_map.get(ev['date'], 0)
+
+            # Se há qty_declarada no ajuste e a bonificação cria o ativo do zero,
+            # usa a quantidade declarada (corrige arredondamentos da B3)
+            qty_decl = ajuste_ticker.get('qty_declarada')
+            if qty_decl is not None and pos['quantity'] == 0.0:
+                qty = _round2(float(qty_decl))
+
             op_val     = ev.get('operation_value') or 0
             unit_price = ev.get('cost_per_share')  or 0
-            if op_val > 0:
-                bonus_cost  = _round2(op_val)
+
+            if valor_fiscal_unit > 0:
+                bonus_cost    = _round2(qty * valor_fiscal_unit)
+                unit_for_hist = valor_fiscal_unit
+            elif op_val > 0:
+                bonus_cost    = _round2(op_val)
                 unit_for_hist = _round2(op_val / qty) if qty > 0 else unit_price
             elif unit_price > 0:
-                bonus_cost  = _round2(qty * unit_price)
+                bonus_cost    = _round2(qty * unit_price)
                 unit_for_hist = unit_price
             else:
-                # B3 não informa o custo patrimonial neste evento
-                bonus_cost  = 0.0
+                bonus_cost    = 0.0
                 unit_for_hist = 0.0
                 validation_issues.append({
                     'level':   'warning',
                     'message': (
                         f"Bonificação de {qty} {ticker} em {ev['date']}: custo não informado pela B3. "
-                        f"O custo patrimonial precisa ser informado manualmente para que o CMPA fique correto. "
-                        f"Consulte o comunicado da empresa ou o portal da CVM."
+                        f"Informe o valor fiscal unitário na seção 'Ajustes' para que o CMPA fique correto."
                     ),
                     'ticker': ticker, 'date': ev['date'],
                 })
@@ -443,43 +519,50 @@ def calculate_positions(
 
         elif ev['kind'] in ('split', 'merge'):
             pos = get_or_create(ticker, ticker, ev['date'])
-            pos['quantity']     += ev['quantity_delta']
-            pos['average_cost']  = pos['total_cost'] / pos['quantity'] if pos['quantity'] > 0 else 0.0
-            ev_type = 'Desdobramento' if ev['kind'] == 'split' else 'Agrupamento'
-            delta   = ev['quantity_delta']
-            corporate_events.append({
-                'date': ev['date'], 'type': ev_type, 'ticker': ticker,
-                'details': f"{ev_type}: {'+' if delta > 0 else ''}{delta} cota(s)",
-                'quantity_change': delta,
-            })
+            delta = ev['quantity_delta']
+            # Grupamento/Desdobro de frações pequenas (< 1 ação) = geração de fração
+            # que vai a leilão — não altera a posição principal, apenas registra.
+            if abs(delta) < 1.0:
+                ev_type = 'Desdobramento (fração)' if ev['kind'] == 'split' else 'Grupamento (fração)'
+                corporate_events.append({
+                    'date': ev['date'], 'type': ev_type, 'ticker': ticker,
+                    'details': f"{ev_type}: fração de {delta:+.4f} ação(ões) gerada para leilão",
+                    'quantity_change': 0,
+                })
+            else:
+                pos['quantity']    += delta
+                pos['average_cost'] = pos['total_cost'] / pos['quantity'] if pos['quantity'] > 0 else 0.0
+                ev_type = 'Desdobramento' if ev['kind'] == 'split' else 'Agrupamento'
+                corporate_events.append({
+                    'date': ev['date'], 'type': ev_type, 'ticker': ticker,
+                    'details': f"{ev_type}: {delta:+} ação(ões) — CMPA recalculado para R${pos['average_cost']:.2f}",
+                    'quantity_change': delta,
+                })
             operations.append({
                 'date': ev['date'], 'ticker': ticker, 'full_name': pos['full_name'],
-                'type': ev_type, 'quantity': delta,
-                'unit_price': 0, 'value': 0, 'institution': pos['institution'],
+                'type': 'Desdobramento' if ev['kind'] == 'split' else 'Agrupamento',
+                'quantity': delta, 'unit_price': 0, 'value': 0, 'institution': pos['institution'],
             })
 
         elif ev['kind'] == 'auction':
             pos = get_or_create(ticker, ticker, ev['date'])
-            delta = ev.get('quantity_delta', 0)
-            if delta < 0:
-                qty        = abs(delta)
-                cost_basis = _round2(pos['average_cost'] * qty)
-                gain       = _round2((ev.get('value') or 0) - cost_basis)
-                sales.append({
-                    'date': ev['date'], 'ticker': ticker,
-                    'quantity': qty, 'sale_price': ev.get('value', 0),
-                    'cmpa_at_sale': _round2(pos['average_cost']),
-                    'cost_basis': cost_basis, 'gain': gain,
-                })
-                pos['quantity']  -= qty
+            frac_val = ev.get('value') or 0
+            frac_qty = abs(ev.get('quantity_delta', 0))
+            # Leilão de Fração: a fração é residual gerada por grupamento/desdobro.
+            # Ela NÃO faz parte das ações inteiras do investidor.
+            # Apenas remove se a quantidade atual excede um número inteiro
+            # (ou seja, se a fração foi incorporada erroneamente à posição).
+            qty_inteira = round(pos['quantity'])  # quantidade inteira esperada
+            excesso = pos['quantity'] - qty_inteira
+            if excesso > 0.001 and abs(excesso - frac_qty) < 0.01:
+                # A fração está sobrando na posição — remover
+                pos['quantity']   = _round2(qty_inteira)
                 pos['total_cost'] = _round2(pos['average_cost'] * pos['quantity'])
-            else:
-                pos['quantity']     += delta
-                pos['average_cost']  = pos['total_cost'] / pos['quantity'] if pos['quantity'] > 0 else 0.0
+            # Caso contrário: não altera posição (fração era externa)
             corporate_events.append({
                 'date': ev['date'], 'type': 'Leilão de Frações', 'ticker': ticker,
-                'details': f"Leilão: {'+' if delta >= 0 else ''}{delta} cota(s)",
-                'quantity_change': delta,
+                'details': f"Leilão de fração: receita R${frac_val:.2f} (tributação exclusiva)",
+                'quantity_change': 0,
             })
 
         elif ev['kind'] == 'amortizacao':
@@ -502,13 +585,16 @@ def calculate_positions(
             pos = get_or_create(ticker, ticker, ev['date'])
             delta     = ev.get('quantity_delta', 0)
             cisao_val = ev.get('value', 0)
+            # Cisão com Crédito e sem valor = transferência de posição entre empresas
+            # (ex: Itaú/Itan). Cria ou ajusta a posição sem alterar custo se valor=0.
             if delta != 0:
-                pos['quantity']   = max(pos['quantity'] + delta, 0)
-            pos['total_cost']  = _round2(max(pos['total_cost'] - cisao_val, 0))
+                pos['quantity'] = max(pos['quantity'] + delta, 0)
+            if cisao_val > 0:
+                pos['total_cost']  = _round2(max(pos['total_cost'] - cisao_val, 0))
             pos['average_cost'] = pos['total_cost'] / pos['quantity'] if pos['quantity'] > 0 else 0.0
             corporate_events.append({
                 'date': ev['date'], 'type': 'Cisão', 'ticker': ticker,
-                'details': f"Cisão: {'+' if delta >= 0 else ''}{delta} cota(s), -R${cisao_val:.2f} do custo",
+                'details': f"Cisão: {'+' if delta >= 0 else ''}{delta} cota(s){f', -{cisao_val:.2f} do custo' if cisao_val else ''}",
                 'quantity_change': delta,
             })
             operations.append({
@@ -517,7 +603,198 @@ def calculate_positions(
                 'unit_price': 0, 'value': cisao_val, 'institution': pos['institution'],
             })
 
+        elif ev['kind'] == 'restituicao_capital':
+            pos = get_or_create(ticker, ticker, ev['date'])
+            rest_val  = ev.get('value', 0)
+            old_cost  = pos['total_cost']
+            # Subtrai o valor recebido do custo total acumulado (não altera quantidade)
+            pos['total_cost']   = _round2(max(old_cost - rest_val, 0))
+            pos['average_cost'] = pos['total_cost'] / pos['quantity'] if pos['quantity'] > 0 else 0.0
+            pos['corporate_events_history'].append({
+                'type':  'RESTITUICAO_CAPITAL',
+                'date':  ev['date'],
+                'value': rest_val,
+            })
+            corporate_events.append({
+                'date':            ev['date'],
+                'type':            'Restituição de Capital',
+                'ticker':          ticker,
+                'details':         (
+                    f"Restituição: -{_round2(rest_val):.2f} do custo total "
+                    f"(era R${old_cost:.2f} → R${pos['total_cost']:.2f}) — "
+                    f"CMPA recalculado para R${pos['average_cost']:.2f}"
+                ),
+                'quantity_change': 0,
+            })
+            operations.append({
+                'date':        ev['date'],
+                'ticker':      ticker,
+                'full_name':   pos['full_name'],
+                'type':        'Restituição de Capital',
+                'quantity':    ev.get('quantity', 0),
+                'unit_price':  ev.get('unit_price', 0),
+                'value':       rest_val,
+                'institution': pos['institution'],
+                'note':        f"Redução de custo: -{rest_val:.2f}",
+            })
+
+        elif ev['kind'] == 'fraction':
+            pos = get_or_create(ticker, ticker, ev['date'])
+            delta    = ev.get('quantity_delta', 0)
+            frac_val = ev.get('value', 0)
+            # Fração em Ativos: fragmento residual de grupamento/desdobro.
+            # Só altera posição se há valor financeiro real (compra de fração paga).
+            # Débito sem valor = fração enviada a leilão → não remove da posição principal.
+            if frac_val > 0 and delta > 0:
+                pos['quantity']   = max(pos['quantity'] + delta, 0)
+                pos['total_cost'] = _round2(pos['total_cost'] + frac_val)
+                pos['average_cost'] = pos['total_cost'] / pos['quantity'] if pos['quantity'] > 0 else 0.0
+                corporate_events.append({
+                    'date': ev['date'], 'type': 'Fração em Ativos', 'ticker': ticker,
+                    'details': f"Fração incorporada: +{delta} ação(ões), custo +R${frac_val:.2f}",
+                    'quantity_change': delta,
+                })
+            else:
+                # Fração gerada (vai a leilão) — apenas registra, posição inalterada
+                corporate_events.append({
+                    'date': ev['date'], 'type': 'Fração em Ativos', 'ticker': ticker,
+                    'details': f"Fração de {abs(delta):.2f} ação(ões) gerada — aguarda leilão",
+                    'quantity_change': 0,
+                })
+            operations.append({
+                'date': ev['date'], 'ticker': ticker, 'full_name': pos['full_name'],
+                'type': 'Fração em Ativos', 'quantity': delta,
+                'unit_price': _round2(frac_val / abs(delta)) if delta and frac_val else 0,
+                'value': frac_val, 'institution': pos['institution'],
+            })
+
+    # ── Aplica ajustes que não foram disparados por evento (ativos sem eventos em 2025) ──
+    # Ex: AXIA6 com custo declarado=0 mas sem nenhuma compra/venda em 2025
+    if year and ajustes_irpf:
+        for ticker_ajuste, ajuste in ajustes_irpf.items():
+            if ticker_ajuste not in _irpf_injected and 'custo_declarado' in ajuste:
+                if ticker_ajuste in positions:
+                    pos_inj = positions[ticker_ajuste]
+                    custo_decl = _round2(float(ajuste['custo_declarado']))
+                    qty_decl   = ajuste.get('qty_declarada')
+                    pos_inj['total_cost'] = custo_decl
+                    if qty_decl is not None:
+                        pos_inj['quantity'] = _round2(float(qty_decl)) if float(qty_decl) > 0 else pos_inj['quantity']
+                    pos_inj['average_cost'] = (
+                        pos_inj['total_cost'] / pos_inj['quantity']
+                        if pos_inj['quantity'] > 0 else 0.0
+                    )
+
     # ── Monta ativos finais ────────────────────────────────────────────────────
+    # Determina timestamps de corte para os dois snapshots temporais
+    # Snapshot 1: 31/12 do ano anterior ao selecionado
+    # Snapshot 2: 31/12 do ano selecionado (= posição final já calculada acima)
+    _year_prev = (year - 1) if year else 0
+
+    def _ts_year_end(y: int) -> int:
+        """Retorna timestamp do dia 31/12/yyyy às 23:59."""
+        if not y:
+            return 0
+        try:
+            return int(datetime(y, 12, 31, 23, 59).timestamp())
+        except Exception:
+            return 0
+
+    ts_prev_end = _ts_year_end(_year_prev)   # 31/12/ano-anterior
+
+    # Re-processa a timeline para obter snapshot em 31/12 do ano anterior
+    snapshot_prev: Dict[str, float] = {}
+    snapshot_prev_qty: Dict[str, float] = {}
+
+    if year and ts_prev_end > 0:
+        _pos_snap: Dict[str, Dict] = {}
+
+        def _get_snap(t: str) -> Dict:
+            if t not in _pos_snap:
+                _pos_snap[t] = {'quantity': 0.0, 'total_cost': 0.0, 'average_cost': 0.0}
+            return _pos_snap[t]
+
+        for ev in events:
+            if ev['ts'] > ts_prev_end:
+                break
+            t = ev['ticker']
+            p = _get_snap(t)
+
+            if ev['kind'] == 'buy':
+                new_qty  = p['quantity'] + ev['quantity']
+                new_cost = p['total_cost'] + ev['value']
+                p['quantity']     = new_qty
+                p['total_cost']   = new_cost
+                p['average_cost'] = new_cost / new_qty if new_qty > 0 else 0.0
+
+            elif ev['kind'] == 'sell':
+                old_qty  = p['quantity']
+                sold_qty = min(ev['quantity'], old_qty)
+                if sold_qty > 0 and old_qty > 0:
+                    p['total_cost'] = _round2(p['total_cost'] * (old_qty - sold_qty) / old_qty)
+                p['quantity']   -= sold_qty
+                p['average_cost'] = p['total_cost'] / p['quantity'] if p['quantity'] > 0 else 0.0
+
+            elif ev['kind'] == 'bonus':
+                qty        = ev['quantity']
+                op_val     = ev.get('operation_value') or 0
+                unit_price = ev.get('cost_per_share')  or 0
+                bonus_cost = _round2(op_val if op_val > 0 else (qty * unit_price if unit_price > 0 else 0.0))
+                p['quantity']   += qty
+                p['total_cost']  = _round2(p['total_cost'] + bonus_cost)
+                p['average_cost'] = p['total_cost'] / p['quantity'] if p['quantity'] > 0 else 0.0
+
+            elif ev['kind'] in ('split', 'merge'):
+                p['quantity']   += ev['quantity_delta']
+                p['average_cost'] = p['total_cost'] / p['quantity'] if p['quantity'] > 0 else 0.0
+
+            elif ev['kind'] == 'auction':
+                delta = ev.get('quantity_delta', 0)
+                if delta < 0:
+                    qty = abs(delta)
+                    p['quantity']  -= qty
+                    p['total_cost'] = _round2(p['average_cost'] * p['quantity'])
+                else:
+                    p['quantity']   += delta
+                    p['average_cost'] = p['total_cost'] / p['quantity'] if p['quantity'] > 0 else 0.0
+
+            elif ev['kind'] == 'amortizacao':
+                p['total_cost']   = _round2(max(p['total_cost'] - ev.get('value', 0), 0))
+                p['average_cost'] = p['total_cost'] / p['quantity'] if p['quantity'] > 0 else 0.0
+
+            elif ev['kind'] == 'cisao':
+                delta = ev.get('quantity_delta', 0)
+                if delta != 0:
+                    p['quantity'] = max(p['quantity'] + delta, 0)
+                p['total_cost']   = _round2(max(p['total_cost'] - ev.get('value', 0), 0))
+                p['average_cost'] = p['total_cost'] / p['quantity'] if p['quantity'] > 0 else 0.0
+
+            elif ev['kind'] == 'restituicao_capital':
+                p['total_cost']   = _round2(max(p['total_cost'] - ev.get('value', 0), 0))
+                p['average_cost'] = p['total_cost'] / p['quantity'] if p['quantity'] > 0 else 0.0
+
+            elif ev['kind'] == 'fraction':
+                delta = ev.get('quantity_delta', 0)
+                p['quantity']   = max(p['quantity'] + delta, 0)
+                p['total_cost'] = _round2(p['total_cost'] + ev.get('value', 0))
+                p['average_cost'] = p['total_cost'] / p['quantity'] if p['quantity'] > 0 else 0.0
+
+        for t, p in _pos_snap.items():
+            snapshot_prev[t]     = _round2(p['total_cost'])
+            snapshot_prev_qty[t] = _round2(p['quantity'])
+
+        # Sobrescreve o snapshot com custo declarado no IRPF anterior, se informado
+        for ticker_ajuste, ajuste in ajustes_irpf.items():
+            # custo_irpf_anterior = valor exibido na coluna 31/12/ano-anterior (pode ser 0 = omitido)
+            # custo_declarado = base para cálculo dos eventos de 2025
+            # Se só tem custo_declarado (sem custo_irpf_anterior), usa o mesmo para ambos
+            if 'custo_irpf_anterior' in ajuste:
+                snapshot_prev[ticker_ajuste] = _round2(float(ajuste['custo_irpf_anterior']))
+            elif 'custo_declarado' in ajuste:
+                snapshot_prev[ticker_ajuste] = _round2(float(ajuste['custo_declarado']))
+            if 'qty_declarada' in ajuste:
+                snapshot_prev_qty[ticker_ajuste] = _round2(float(ajuste['qty_declarada']))
+
     assets = []
     for pos in positions.values():
         if pos['quantity'] < 0.0001:
@@ -525,13 +802,22 @@ def calculate_positions(
         asset_type = _detect_type(pos['ticker'], pos.get('full_name', ''))
         irpf       = _get_irpf_code(asset_type)
         total_cost = _round2(pos['total_cost'])
+
+        ticker = pos['ticker']
+        cost_prev_year = snapshot_prev.get(ticker, 0.0)
+        qty_prev_year  = snapshot_prev_qty.get(ticker, 0.0)
+
         assets.append({
-            'ticker':                  pos['ticker'],
+            'ticker':                  ticker,
             'reference_ticker':        pos.get('reference_ticker'),
             'full_name':               pos['full_name'],
             'quantity':                _round2(pos['quantity']),
             'average_cost':            _round2(pos['average_cost']),
             'total_cost':              total_cost,
+            # Snapshots temporais para a tabela IRPF
+            'cost_prev_year':          cost_prev_year,   # Situação em 31/12/ano-anterior
+            'qty_prev_year':           qty_prev_year,    # Quantidade em 31/12/ano-anterior
+            'cost_curr_year':          total_cost,       # Situação em 31/12/ano-selecionado
             'dividends':               0.0,
             'jcp':                     0.0,
             'fii_income':              0.0,
@@ -548,6 +834,7 @@ def calculate_positions(
             'year_end_total':          total_cost,
             'buy_events':              pos.get('buy_events', []),
             'bonus_events':            pos.get('bonus_events', []),
+            'corporate_events_history': pos.get('corporate_events_history', []),
         })
 
     assets.sort(key=lambda a: a['ticker'])

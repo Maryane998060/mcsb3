@@ -1,4 +1,6 @@
 flask>=3.0.0
+flask-login>=0.6.3
+gunicorn>=21.2.0
 openpyxl>=3.1.0
 pdfplumber>=0.11.0
 python-multipart>=0.0.6

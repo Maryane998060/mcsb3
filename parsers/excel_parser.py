@@ -5,7 +5,7 @@ Suporta os dois formatos (8 e 9 colunas) do investor.b3.com.br.
 
 import re
 import unicodedata
-from typing import List, Dict, Optional, Any
+from typing import List, Dict, Optional, Any, Union, BinaryIO
 import openpyxl
 
 
@@ -18,6 +18,16 @@ def _norm(s: Any) -> str:
     s = s.lower()
     s = re.sub(r'[^a-z0-9]+', '_', s)
     return s.strip('_')
+
+
+def _search_norm(s: Any) -> str:
+    """Normaliza texto para buscas com espaços e termos legíveis."""
+    s = unicodedata.normalize('NFD', str(s or ''))
+    s = ''.join(c for c in s if not unicodedata.combining(c))
+    s = s.lower()
+    s = re.sub(r'[^a-z0-9\s]+', ' ', s)
+    s = re.sub(r'\s+', ' ', s)
+    return s.strip()
 
 
 def _parse_number(value: Any) -> float:
@@ -36,14 +46,62 @@ def _parse_number(value: Any) -> float:
 
 
 def _normalize_ticker(ticker: str) -> str:
+    """
+    Higieniza o ticker removendo prefixos de Termo de Ação, acentos e
+    valores residuais de tabelas, retornando o ticker base válido.
+    """
     if not ticker:
         return ''
-    t = ticker.strip().upper()
-    t = re.sub(r'\s+', '', t)
-    # Remove sufixo 'F' de frações (VALE3F → VALE3)
-    if re.match(r'^[A-Z]{4}\d+F$', t):
-        return t[:-1]
-    return t
+
+    t = unicodedata.normalize('NFD', str(ticker or ''))
+    t = ''.join(c for c in t if not unicodedata.combining(c))
+    t = t.upper().strip()
+    t = re.sub(r'\s+', ' ', t)
+
+    # Remove prefixos de termo/opção não relevantes para o ticker base
+    t = re.sub(
+        r'^(?:TERMO\s+DE\s+ACAO|TERMOA?CAO|TERMO|OPCAO|OPÇÃO|TERMO\s+DE\s+ACAO|TERMO\s+DE\s+ACOES?)\b\s*',
+        '',
+        t,
+        flags=re.IGNORECASE,
+    )
+
+    # Extraia o ticker base entre os tokens. Procura um padrão que comece com 2-5 letras,
+    # seguido de 1-3 dígitos, e opcionalmente termine com T ou F.
+    # Ex: "B3SA3", "VBBR3T", "AXIA11"
+    clean = re.sub(r'[^A-Z0-9]+', ' ', t)
+    found_ticker = None
+    
+    # Primeira tentativa: procura entre as palavras separadas
+    for part in clean.split():
+        if re.match(r'^[A-Z]{2,5}\d{1,3}[TF]?$', part):
+            found_ticker = part
+            break
+    
+    # Fallback: procura dentro da string como um todo (para casos como "B3SA3")
+    if not found_ticker:
+        # Procura uma sequência contínua de letras e dígitos que forme um ticker válido
+        # Usa uma busca gulosa para evitar capturar apenas "SA3" em "B3SA3"
+        m = re.search(r'([A-Z]+\d+[A-Z]*\d*[TF]?|[A-Z]+\d+)', clean)
+        if m and len(m.group(0)) > 2:
+            found_ticker = m.group(0)
+    
+    if found_ticker:
+        t = found_ticker
+
+    # Remove sufixos residuais de fração ou tabela
+    if t.endswith('T') and len(t) > 4:
+        t = t[:-1]
+    if re.match(r'^[A-Z]{4,5}\d{1,2}F$', t):
+        t = t[:-1]
+
+    tabela_conversao = {
+        'ELET6': 'AXIA6',
+        'EMBR3': 'EMBJ3',
+        'BRDT3': 'VBBR3'
+    }
+
+    return tabela_conversao.get(t, t)
 
 
 def _extract_cnpj(value: Any) -> str:
@@ -52,7 +110,7 @@ def _extract_cnpj(value: Any) -> str:
     return match.group(0) if match else ''
 
 
-def _read_rows(file_path: str) -> List[List[Any]]:
+def _read_rows(file_path: Union[str, BinaryIO]) -> List[List[Any]]:
     # read_only=True é evitado porque arquivos B3 têm dimensão incorreta (ex: A1:A1)
     # o que faz o openpyxl retornar apenas 1 linha no modo read-only.
     wb = openpyxl.load_workbook(file_path, data_only=True)
@@ -95,7 +153,7 @@ def _col_idx(col_map: Dict[str, int], *candidates: str) -> int:
 
 # ── Negociação ─────────────────────────────────────────────────────────────────
 
-def parse_negociacao_sheet(file_path: str) -> List[Dict]:
+def parse_negociacao_sheet(file_path: Union[str, BinaryIO]) -> List[Dict]:
     rows = _read_rows(file_path)
     header_idx = _find_header_row(
         rows,
@@ -113,7 +171,7 @@ def parse_negociacao_sheet(file_path: str) -> List[Dict]:
     i_market      = ci('Mercado', 'Market',                                                  default=2)
     i_institution = ci('Instituição', 'Instituicao', 'Corretora', 'Intermediário',           default=4)
     i_product     = ci('Código de Negociação', 'Codigo de Negociacao', 'Codigo Negociacao',
-                        'Ativo', 'Ticker', 'Papel', 'Código Ativo',                           default=5)
+                        'Ativo', 'Ticker', 'Papel', 'Código Ativo',                          default=5)
     i_qty         = ci('Quantidade', 'Qtde', 'Qtd',                                          default=6)
     i_price       = ci('Preço', 'Preco', 'Preço Unitário', 'Valor Unitário', 'Cotação',      default=7)
     i_value       = ci('Valor', 'Valor Total', 'Valor da Operação', 'Valor Operação',         default=8)
@@ -135,8 +193,14 @@ def parse_negociacao_sheet(file_path: str) -> List[Dict]:
         if not raw_product or not re.search(r'\d{2}/\d{2}/\d{4}', date):
             continue
 
-        parts = raw_product.split(' - ')
-        ticker = parts[0].strip()
+        product_norm = _search_norm(raw_product)
+        if re.search(r'\b(termo|opcao|opção|futuros?|deriv|warrant|common stock|preferred stock)\b', product_norm):
+            continue
+        if re.search(r'\b(CRA|CRI|DEB|DEBENTURE|FBC|FBP|B[A-Z]{0,3}RUTO|TITULO|TÍTULO|LET|LFT|NTN|TESOURO|CDB)\b', raw_product, re.IGNORECASE):
+            continue
+
+        ticker = _normalize_ticker(raw_product)
+        parts = re.split(r'\s*-\s*', raw_product)
         full_name = ' - '.join(parts[1:]).strip() or ticker
 
         type_lower = op_type.lower()
@@ -154,9 +218,9 @@ def parse_negociacao_sheet(file_path: str) -> List[Dict]:
             'market':            market,
             'institution':       institution,
             'ticker':            ticker,
-            'normalized_ticker': _normalize_ticker(ticker),
+            'normalized_ticker': ticker,
             'full_name':         full_name,
-            'quantity':          _parse_number(row[i_qty]   if i_qty  < len(row) else 0),
+            'quantity':          _parse_number(row[i_qty]   if i_qty   < len(row) else 0),
             'price':             _parse_number(row[i_price] if i_price < len(row) else 0),
             'value':             _parse_number(row[i_value] if i_value < len(row) else 0),
             'asset_cnpj':        asset_cnpj or None,
@@ -168,7 +232,7 @@ def parse_negociacao_sheet(file_path: str) -> List[Dict]:
 
 # ── Movimentação ───────────────────────────────────────────────────────────────
 
-def parse_movimentacao_sheet(file_path: str) -> List[Dict]:
+def parse_movimentacao_sheet(file_path: Union[str, BinaryIO]) -> List[Dict]:
     rows = _read_rows(file_path)
     header_idx = _find_header_row(
         rows,
@@ -186,10 +250,10 @@ def parse_movimentacao_sheet(file_path: str) -> List[Dict]:
     i_date        = ci('Data', 'Data do Lançamento', 'Data Lançamento',                        default=1)
     i_type        = ci('Movimentação', 'Movimentacao', 'Tipo', 'Descrição', 'Histórico',       default=2)
     i_product     = ci('Produto', 'Ativo', 'Descrição do Ativo', 'Papel',                      default=3)
-    i_institution = ci('Instituição', 'Instituicao', 'Corretora', 'Intermediário',             default=4)
+    i_institution = ci('Instituição', 'Instituicao', 'Corretora', 'Intermediário',              default=4)
     i_qty         = ci('Quantidade', 'Qtde', 'Qtd',                                            default=5)
     i_unit_price  = ci('Preço Unitário', 'Preco Unitario', 'Valor Unitário', 'Preço',
-                        'Cotação',                                                              default=6)
+                        'Cotação',                                                             default=6)
     i_value       = ci('Valor da Operação', 'Valor Operacao', 'Valor Total', 'Valor',          default=7)
 
     movements = []
@@ -211,7 +275,17 @@ def parse_movimentacao_sheet(file_path: str) -> List[Dict]:
         if re.match(r'^total', product, re.IGNORECASE):
             continue
 
-        ticker = product.split(' - ')[0].strip()
+        product_norm = _search_norm(product)
+        type_norm = _search_norm(op_type)
+        if re.search(r'\b(termo|opcao|opção|futuros?|deriv|warrant|common stock|preferred stock)\b', product_norm) or \
+           re.search(r'\b(liquidacao\s*termo|liquidacao|liquida(c|ç)(ao|ã)o|termo|opcao|opção|futuros?|deriv|warrant)\b', type_norm):
+            continue
+
+        # Filtra ativos de renda fixa / instrumentos que não participam do cálculo de CMPA de ações/FII
+        if re.search(r'\b(CRA|CRI|DEB|DEBENTURE|FBC|FBP|CRI[\s-]|CRA[\s-]|B[A-Z]{0,3}RUTO|TITULO|TÍTULO|LET|LFT|NTN|TESOURO|CDB)\b', product, re.IGNORECASE):
+            continue
+
+        ticker = _normalize_ticker(product)
         asset_cnpj  = _extract_cnpj(product)
         broker_cnpj = _extract_cnpj(institution)
 
@@ -220,7 +294,8 @@ def parse_movimentacao_sheet(file_path: str) -> List[Dict]:
             'date':              date,
             'type':              op_type,
             'product':           product,
-            'normalized_ticker': _normalize_ticker(ticker),
+            'ticker':            ticker,
+            'normalized_ticker': ticker,
             'institution':       institution,
             'quantity':          _parse_number(row[i_qty]        if i_qty        < len(row) else 0),
             'unit_price':        _parse_number(row[i_unit_price] if i_unit_price < len(row) else 0),

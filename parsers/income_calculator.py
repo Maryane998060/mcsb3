@@ -4,6 +4,7 @@ Classifica proventos (dividendos, JCP, rendimentos FII) a partir da MovimentaÃ§Ã
 
 import unicodedata
 from typing import List, Dict, Any, Tuple
+from parsers.excel_parser import _normalize_ticker
 
 
 def _norm(s: str) -> str:
@@ -70,7 +71,7 @@ def calculate_income(movements: List[Dict], year: int) -> List[Dict]:
             continue
 
         type_str = _norm(m['type'])
-        ticker   = m['product'].split(' - ')[0].strip().upper()
+        ticker   = _normalize_ticker(m.get('product', '') or m.get('ticker', ''))
         if not ticker:
             continue
 

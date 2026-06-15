@@ -1,2 +1,25 @@
+# Arquivos sensíveis — NÃO enviar para o GitHub
+usuarios.json
+ajustes_irpf.json
+irpf_carteira.db
+*.db
+
+# Python
 __pycache__/
 *.pyc
+*.pyo
+*.pyd
+.env
+venv/
+.venv/
+
+# Dados de exemplo (arquivos reais do cliente)
+exemplos/*.xlsx
+exemplos/*.pdf
+
+# Kiro
+.kiro/
+
+# OS
+.DS_Store
+Thumbs.db

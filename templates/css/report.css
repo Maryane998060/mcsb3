@@ -1,19 +1,218 @@
-/* Estilos específicos da página de relatório */
+/* ══════════════════════════════════════════════════════════
+   Report Page
+   ══════════════════════════════════════════════════════════ */
 
-/* Cabeçalho de seção de auditoria */
-details > summary {
-  list-style: none;
-}
-details > summary::before {
-  content: '▶ ';
-  font-size: .8em;
-}
-details[open] > summary::before {
-  content: '▼ ';
+/* ── Report header ────────────────────────────────────────── */
+.report-header {
+  background: linear-gradient(135deg, var(--brand) 0%, var(--brand-mid) 100%);
+  border-radius: var(--radius-lg);
+  padding: 1.5rem 2rem;
+  margin-bottom: 1.5rem;
+  color: #fff;
+  box-shadow: 0 4px 20px rgba(23,70,162,.2);
 }
 
-/* Tabela de operações com scroll vertical */
-#tab-ops .table-responsive {
-  max-height: 600px;
-  overflow-y: auto;
+[data-bs-theme="dark"] .report-header {
+  background: linear-gradient(135deg, #1c2128 0%, #22272e 100%);
+  border: 1px solid var(--border);
+  box-shadow: none;
+  color: var(--text-primary);
+}
+
+.report-header h2 {
+  font-size: 1.35rem;
+  font-weight: 800;
+  margin: 0 0 .3rem;
+  letter-spacing: -.03em;
+}
+
+.report-header .meta {
+  font-size: .8rem;
+  opacity: .8;
+}
+
+[data-bs-theme="dark"] .report-header .meta {
+  color: var(--text-secondary);
+  opacity: 1;
+}
+
+.report-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: .3rem;
+  font-size: .68rem;
+  font-weight: 600;
+  padding: .25em .7em;
+  border-radius: 99px;
+  background: rgba(255,255,255,.15);
+  border: 1px solid rgba(255,255,255,.2);
+  color: rgba(255,255,255,.9);
+}
+
+[data-bs-theme="dark"] .report-chip {
+  background: var(--bg-subtle);
+  border-color: var(--border);
+  color: var(--text-secondary);
+}
+
+/* ── Tabela de Bens & Direitos — compacta (muitas colunas) ──────────── */
+.table-bens {
+  font-size: .72rem !important;
+}
+
+.table-bens thead th {
+  font-size: .63rem !important;
+  padding: .4rem .5rem !important;
+  letter-spacing: .03em !important;
+  white-space: nowrap !important;
+}
+
+.table-bens tbody td {
+  padding: .38rem .5rem !important;
+  font-size: .72rem !important;
+}
+
+.table-bens .discriminacao-cell {
+  font-size: .65rem !important;
+  max-width: 220px !important;
+}
+
+/* ── Coluna situação em destaque ──────────────────────────── */
+.table thead th.col-highlight {
+  background: var(--brand-mid) !important;
+}
+
+[data-bs-theme="dark"] .table thead th.col-highlight {
+  background: #2d333b !important;
+}
+
+.col-highlight-val {
+  font-weight: 700;
+  color: var(--brand) !important;
+}
+
+[data-bs-theme="dark"] .col-highlight-val {
+  color: var(--brand-light) !important;
+}
+
+/* ── Income type cards ────────────────────────────────────── */
+.income-card {
+  background: var(--bg-card);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-lg);
+  padding: 1.25rem;
+  text-align: center;
+  box-shadow: var(--shadow-sm);
+}
+
+.income-card .ic-label {
+  font-size: .68rem;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: .08em;
+  margin-bottom: .5rem;
+}
+
+.income-card .ic-value {
+  font-size: 1.4rem;
+  font-weight: 800;
+  letter-spacing: -.02em;
+}
+
+.ic-div  .ic-label { color: #3b82f6; }
+.ic-jcp  .ic-label { color: var(--accent); }
+.ic-fii  .ic-label { color: var(--green); }
+.ic-gain .ic-label { color: var(--green); }
+.ic-loss .ic-label { color: var(--red); }
+.ic-net  .ic-label { color: var(--text-secondary); }
+
+.ic-div  { border-top: 3px solid #3b82f6; }
+.ic-jcp  { border-top: 3px solid var(--accent); }
+.ic-fii  { border-top: 3px solid var(--green); }
+.ic-gain { border-top: 3px solid var(--green); }
+.ic-loss { border-top: 3px solid var(--red); }
+.ic-net  { border-top: 3px solid var(--brand); }
+
+/* ── Ranking ──────────────────────────────────────────────── */
+.rank-item {
+  display: flex;
+  align-items: center;
+  gap: .75rem;
+  padding: .75rem 1rem;
+  border-radius: var(--radius-md);
+  border: 1px solid var(--border);
+  background: var(--bg-card);
+  margin-bottom: .5rem;
+  transition: box-shadow .15s;
+}
+
+.rank-item:hover { box-shadow: var(--shadow-sm); }
+
+.rank-medal { font-size: 1.2rem; min-width: 1.75rem; text-align: center; }
+
+.rank-ticker {
+  font-weight: 700;
+  font-size: .88rem;
+  min-width: 4.5rem;
+  color: var(--text-primary);
+}
+
+.rank-bar-bg {
+  flex: 1;
+  background: var(--brand-100);
+  border-radius: 99px;
+  height: .45rem;
+  overflow: hidden;
+}
+
+.rank-bar-fill {
+  height: 100%;
+  border-radius: 99px;
+  background: linear-gradient(90deg, var(--brand), var(--brand-light));
+}
+
+.rank-val {
+  font-weight: 700;
+  font-size: .88rem;
+  min-width: 5.5rem;
+  text-align: right;
+  color: var(--text-primary);
+}
+
+/* ── Discriminação texto longo ────────────────────────────── */
+.discriminacao-cell {
+  max-width: 280px;
+  white-space: normal;
+  font-size: .72rem;
+  color: var(--text-muted);
+  line-height: 1.5;
+}
+
+/* ── Zerados toggle ───────────────────────────────────────── */
+.zerados-toggle {
+  font-size: .78rem;
+  color: var(--text-muted);
+  cursor: pointer;
+  padding: .5rem 0;
+}
+
+/* ── Impressão ────────────────────────────────────────────── */
+@media print {
+  .report-header {
+    background: #1a1a2e !important;
+    -webkit-print-color-adjust: exact;
+    print-color-adjust: exact;
+    color: #fff !important;
+    page-break-after: avoid;
+  }
+
+  .report-header h2 { color: #fff !important; }
+  .report-header .meta { color: #ccc !important; }
+  .report-chip { background: rgba(255,255,255,.15) !important; color: #fff !important; }
+
+  /* Evita que cada linha da tabela vire uma pagina */
+  .table tbody tr { page-break-inside: avoid !important; }
+
+  /* Rank items nao quebram */
+  .rank-item { page-break-inside: avoid; }
 }
