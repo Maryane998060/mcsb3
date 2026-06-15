@@ -603,12 +603,6 @@ def process():
             'sales_year_count':   len(sales_year),
             'sales_total_count':  len(sales),
         },
-        'diagnostics': {
-            'negociacao_rows':  len(transactions),
-            'movimentacao_rows': len(movements),
-            'assets_found':     len(assets),
-            'income_found':     len(income_events),
-        },
     }
 
     report_id = str(uuid.uuid4())
