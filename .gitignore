@@ -13,9 +13,10 @@ __pycache__/
 venv/
 .venv/
 
-# Dados de exemplo (arquivos reais do cliente)
+# Dados de clientes — NUNCA subir
 exemplos/*.xlsx
 exemplos/*.pdf
+exemplos/*.csv
 
 # Kiro
 .kiro/
@@ -23,3 +24,6 @@ exemplos/*.pdf
 # OS
 .DS_Store
 Thumbs.db
+
+# Logs
+*.log
