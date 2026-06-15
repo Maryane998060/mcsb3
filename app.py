@@ -854,3 +854,12 @@ def _parse_date_to_datetime(date_str: str):
 if __name__ == '__main__':
     port = int(os.environ.get('PORT', 5000))
     app.run(host='0.0.0.0', port=port, debug=True)
+
+
+# Handler de erro 500 — mostra o erro real para diagnóstico
+import traceback as _tb
+
+@app.errorhandler(500)
+def handle_500(e):
+    err = _tb.format_exc()
+    return f"<pre>ERRO 500:\n{err}</pre>", 500
